@@ -1,0 +1,371 @@
+
+include "../plang/common/builtin/types.pog";
+
+include "../grax/grax.pog";
+
+// ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
+
+/* TODOs:
+    - terrain gen
+    - block textures
+    - block break/place
+    - character movement / block collision
+*/
+
+const Chunk_Pool_Size = 4;
+const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
+Chunk[Pool_Size] chunk_pool;
+
+Chunk* get_chunk(ivec3 chunk_coord) {
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        if equals(chunk.coord, chunk_coord) return chunk;
+    }
+    return null;
+}
+
+uint16 get_block(ivec3 coord) {
+    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    let chunk = get_chunk(chunk_coord);
+    if chunk == null return 0;
+
+    let rel = (coord - chunk_coord*Chunk_Size);
+    let index = get_index(rel.x, rel.y, rel.z);
+    uint16 id = chunk.blocks[index];
+    return id;
+}
+
+void set_block(ivec3 coord, uint16 id) {
+    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    let chunk = get_chunk(chunk_coord);
+    if chunk == null return;
+
+    let rel = (coord - chunk_coord*Chunk_Size);
+    let index = get_index(rel.x, rel.y, rel.z);
+    chunk.blocks[index] = id;
+    chunk.must_remesh = true;
+}
+
+
+RenderLayer static_ui;
+Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
+
+void main() {
+    grax_init();
+    gizmo_setup();
+
+    let renderer = deferred_renderer_init();
+    let R = *renderer;
+    static_ui = create_layer();
+    immediate_layer = *static_ui;
+
+    world_cam.transform.position = {-10, 32, -10};
+
+    int32 s = Chunk_Pool_Size;
+    for z: 0 .. s  for x: 0 .. s {
+        let chunk = *chunk_pool[get_index(s, x, z, 0)];
+        init_chunk(chunk, make_ivec(x, 0, z));
+    }
+
+
+    while grax_loop() {
+        draw_text(vec2_zero, 0.05, "X", White);
+
+        camera_fly_control(*world_cam, 0.05);
+
+        draw_world(R, world_cam);
+
+
+        update_matrices(*world_cam);
+        let o = world_cam.transform.position;
+        let d = camera_ray(world_cam, vec2_zero);
+
+        bool break_block(uint32 index, ivec3 coord, float32 dist) {
+            if dist > 5 return false;
+            uint16 id = get_block(coord);
+            if id == 0 return true;
+
+            gizmo_box(make_vec(coord), vec3_one, Black);
+
+            if mouse_pressed(Left_Mouse) {
+                set_block(coord, 0);
+            }
+
+            return false;
+        }
+
+        // traverse_voxels(o, d, break_block);
+
+        let ts = start_traversal(o, d);
+        while true {
+            traverse(*ts);
+            float32 dist = min(min(ts.max_x, ts.max_y), ts.max_z);
+            if dist > 5 break;
+
+            uint16 id = get_block(ts.coord);
+            if id {
+                gizmo_box(make_vec(ts.coord), vec3_one, Black);
+                if mouse_pressed(Left_Mouse) {
+                    set_block(ts.coord, 0);
+                }
+                break;
+            }
+        }
+
+
+        gizmo_dispatch();
+        dispatch_layer(*static_ui, {scale=1} as Transform2D);
+    }
+}
+
+void draw_world(DeferredRenderer* R, Camera cam) {
+    let time = app.total_run_time / 10.0;
+    // R.sun_dir = { cos(time), 0.7, sin(time) };
+
+    R.sun_dir = noz(forward(cam.transform) * -1 + make_vec(0, 3, 0));
+
+    float32 sr = 10;
+    R.sun_radiance = { sr, sr, sr };
+    R.sun_ambient_factor = 0.05;
+
+    begin_geometry_pass(R, cam);
+
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+
+        if chunk.must_remesh {
+            triangulate_chunk(chunk);
+            chunk.must_remesh = false;
+        }
+
+        Material_PBR pbr = {
+            albedo = {1,1,1},
+            metallic = 0.1,
+            roughness = 0.1
+        };
+
+        float32 size = Chunk_Size;
+
+        vec3 pos = make_vec(chunk.coord)*size;
+        let matrix = make_mat4(pos, 1);
+        uint32 gl_texture = white_texture.gl_handle;
+        draw_geometry(R, chunk.db, pbr, gl_texture, matrix);
+
+        if true { // debug draw
+            gizmo_box(pos + vec3_one*7.5, vec3_one*size, Orange);
+        }
+    }
+
+    begin_light_pass(R);
+    end_frame(R);
+}
+
+int32 sign(float32 v) {
+    if v == 0.0 return 0;
+    if v < 0.0  return -1;
+    else        return 1;
+}
+
+// Fast Voxel Traversal Algorithm: http://www.cse.yorku.ca/~amana/research/grid.pdf
+void traverse_voxels(vec3 o,d, bool(uint32, ivec3, float32) callback) {
+    ivec3 coord = make_ivec(round(o));
+
+    int32 step_x = sign(d.x);
+    int32 step_y = sign(d.y);
+    int32 step_z = sign(d.z);
+
+    float32 delta_x = step_x / d.x;
+    float32 delta_y = step_y / d.y;
+    float32 delta_z = step_z / d.z;
+
+    float32 max_x = (coord.x + 0.5*step_x - o.x) / d.x;
+    float32 max_y = (coord.y + 0.5*step_y - o.y) / d.y;
+    float32 max_z = (coord.z + 0.5*step_z - o.z) / d.z;
+
+    uint32 index = 0;
+    while callback(index++, coord, min(min(max_x, max_y), max_z)) {
+        if max_x < max_y and max_x < max_z {
+            max_x += delta_x;
+            coord.x += step_x;
+        } else if max_y < max_z {
+            max_y += delta_y;
+            coord.y += step_y;
+        } else {
+            max_z += delta_z;
+            coord.z += step_z;
+        }
+    }
+}
+
+struct Voxel_Traversal_State {
+    ivec3 coord;
+
+    int32 step_x;
+    int32 step_y;
+    int32 step_z;
+
+    float32 delta_x;
+    float32 delta_y;
+    float32 delta_z;
+
+    float32 max_x;
+    float32 max_y;
+    float32 max_z;
+
+    uint32 index;
+}
+
+Voxel_Traversal_State start_traversal(vec3 o, d) {
+    Voxel_Traversal_State state = {};
+    state.coord = make_ivec(round(o));
+
+    state.step_x = sign(d.x);
+    state.step_y = sign(d.y);
+    state.step_z = sign(d.z);
+
+    state.delta_x = state.step_x / d.x;
+    state.delta_y = state.step_y / d.y;
+    state.delta_z = state.step_z / d.z;
+
+    state.max_x = (state.coord.x + 0.5*state.step_x - o.x) / d.x;
+    state.max_y = (state.coord.y + 0.5*state.step_y - o.y) / d.y;
+    state.max_z = (state.coord.z + 0.5*state.step_z - o.z) / d.z;
+
+    state.index = 0;
+    return state;
+}
+
+void traverse(Voxel_Traversal_State* state) {
+    state.index++;
+
+    if state.max_x < state.max_y and state.max_x < state.max_z {
+        state.max_x += state.delta_x;
+        state.coord.x += state.step_x;
+    } else if state.max_y < state.max_z {
+        state.max_y += state.delta_y;
+        state.coord.y += state.step_y;
+    } else {
+        state.max_z += state.delta_z;
+        state.coord.z += state.step_z;
+    }
+}
+
+const Chunk_Size = 16;
+const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
+
+struct Chunk {
+    ivec3 coord;
+    uint16[Chunk_Block_Count] blocks;
+    Mesh mesh;
+    DrawBuffers db;
+    bool must_remesh;
+}
+
+int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
+int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
+
+void init_chunk(Chunk* chunk, ivec3 coord) {
+    chunk.coord = coord;
+    chunk.mesh = mesh_create();
+    chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
+    chunk.must_remesh = true;
+
+    // for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
+    //     uint16 block_id = 0;
+    //     if random() < -0.3 {
+    //         block_id = 1;
+    //     }
+
+    //     chunk.blocks[get_index(x, y, z)] = block_id;
+    // }
+
+    int32 s = Chunk_Size;
+    for z: 0 .. s for x: 0 .. s {
+        vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s) * 0.1;
+
+        float32 t = (gnoise(make_vec(pos, 0))+1.0)/2.0;
+        int32 height = lerp(t, 0, 16.0) as int32;
+        for y: 0 .. s {
+            uint16 block_id = 0;
+            if y <= height block_id = 1;
+            chunk.blocks[get_index(x, y, z)] = block_id;
+        }
+    }
+}
+
+void triangulate_chunk(Chunk* chunk) {
+    list_clear(chunk.mesh.vertices);
+    list_clear(chunk.mesh.indices);
+
+    for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
+        uint16 block_id = chunk.blocks[get_index(x, y, z)];
+        if block_id {
+
+            uint16 top = 0;
+            if y+1 < Chunk_Size  top = chunk.blocks[get_index(x, y+1, z)];
+
+            if top == 0 {
+                mat4 matrix = make_mat4(make_vec(x, y + 0.5, z), vec3_one);
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+            {
+                mat4 matrix = make_mat4(make_vec(x, y - 0.5, z), make_vec(-1, 1, 1));
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+
+            {
+                mat4 matrix =
+                    {0,1,0,0,
+                     1,0,0,0,
+                     0,0,1,0,
+                     0,0,0,1};
+
+                matrix.row4 = make_vec(x - 0.5, y, z, 1);
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+            {
+                mat4 matrix =
+                    {0,-1,0,0,
+                     -1,0,0,0,
+                     0,0,1,0,
+                     0,0,0,1};
+
+                matrix.row4 = make_vec(x + 0.5, y, z, 1);
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+
+            {
+                mat4 matrix =
+                    {1,0,0,0,
+                     0,0,1,0,
+                     0,1,0,0,
+                     0,0,0,1};
+
+                matrix.row4 = make_vec(x, y, z - 0.5, 1);
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+
+            {
+                mat4 matrix =
+                    {1,0,0,0,
+                     0,0,-1,0,
+                     0,-1,0,0,
+                     0,0,0,1};
+
+                matrix.row4 = make_vec(x, y, z + 0.5, 1);
+                add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+        }
+    }
+
+    // set_origin(chunk.mesh, vec3_one*7.5);
+
+    gen_normals(chunk.mesh);
+    update_buffers(*chunk.db, chunk.mesh);
+}

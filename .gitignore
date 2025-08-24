@@ -1,0 +1,8 @@
+glfw3.dll
+glfw3dll.lib
+output.exe
+output.exp
+output.g.c
+output.lib
+output.pdb
+output.rdi
