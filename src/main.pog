@@ -6,10 +6,7 @@ include "../grax/grax.pog";
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
 
 /* TODOs:
-    - terrain gen
-    - block textures
-    - block break/place
-    - character movement / block collision
+    - block place
 */
 
 const Chunk_Pool_Size = 4;
@@ -46,9 +43,125 @@ void set_block(ivec3 coord, uint16 id) {
     chunk.must_remesh = true;
 }
 
+struct Entity {
+    Transform tr;
+    Box aabb;
+
+    vec3 vel;
+}
+
+struct BlockInter {
+    vec3 normal;
+    float32 depth;
+}
+
+BlockInter collide(vec3 pos) {
+    let coord = make_ivec(round(pos));
+    let id = get_block(coord);
+    if id == 0 return { vec3_zero, 0 };
+
+    let r = pos - make_vec(coord);
+    let a = abs(r);
+    if a.x > a.y and a.x > a.z {
+        return { vec3_unit_x*sign(r.x), 0.5 - a.x };
+    } else if a.y > a.z {
+        return { vec3_unit_y*sign(r.y), 0.5 - a.y };
+    } else {
+        return { vec3_unit_z*sign(r.z), 0.5 - a.z };
+    }
+}
+
+BlockInter block_normal(vec3 pos, block_pos) {
+    let r = pos - block_pos;
+    let a = abs(r);
+    if a.x > a.y and a.x > a.z {
+        return { vec3_unit_x*sign(r.x), 0.5 - a.x };
+    } else if a.y > a.z {
+        return { vec3_unit_y*sign(r.y), 0.5 - a.y };
+    } else {
+        return { vec3_unit_z*sign(r.z), 0.5 - a.z };
+    }
+}
+
+struct Box { vec3 center, size; }
+
+Box box_overlap(vec3 p1, s1, p2, s2) {
+    vec3 min1 = p1 - s1*0.5;
+    vec3 max1 = p1 + s1*0.5;
+    vec3 min2 = p2 - s2*0.5;
+    vec3 max2 = p2 + s2*0.5;
+
+    vec3 min3 = {max(min1.x, min2.x), max(min1.y, min2.y), max(min1.z, min2.z)};
+    vec3 max3 = {min(max1.x, max2.x), min(max1.y, max2.y), min(max1.z, max2.z)};
+
+    return { (min3 + max3) * 0.5, max3 - min3 };
+}
+
+BlockInter box_inter(Box b1, b2) {
+    let o = box_overlap(b1.center, b1.size, b2.center, b2.size);
+    let s = o.size;
+    let r = b1.center - b2.center;
+    if s.x < s.y and s.x < s.z {
+        return { vec3_unit_x*sign(r.x), s.x };
+    } else if s.y < s.z {
+        return { vec3_unit_y*sign(r.y), s.y };
+    } else {
+        return { vec3_unit_z*sign(r.z), s.z };
+    }
+}
+
+vec3 collide_aabb(vec3 pos, size) {
+    let half_size = size * 0.5;
+    let mi = make_ivec(round(pos - half_size));
+    let mx = make_ivec(round(pos + half_size));
+
+    vec3 move = {};
+
+    for z: mi.z .. mx.z+1 {
+        for y: mi.y .. mx.y+1 {
+            for x: mi.x .. mx.x+1 {
+                let id = get_block(make_ivec(x, y, z));
+                if id == 0 continue;
+
+                vec3 block_pos = make_vec(x,y,z);
+                gizmo_box(block_pos, vec3_one, Green);
+
+                let box = box_overlap(pos, size, block_pos, vec3_one);
+                gizmo_box(box.center, box.size, Blue);
+
+                let inter = box_inter({pos,size} as Box, {block_pos,vec3_one} as Box);
+                let disp = inter.normal*inter.depth;
+                if abs(disp.x) > abs(move.x) move.x = disp.x;
+                if abs(disp.y) > abs(move.y) move.y = disp.y;
+                if abs(disp.z) > abs(move.z) move.z = disp.z;
+
+            }
+        }
+    }
+
+    return move;
+}
 
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
+
+bool is_freecam = true;
+
+struct BlockInfo {
+    char* name;
+
+    char* image_file_name;
+    Image image;
+    Texture2D texture;
+
+}
+
+
+const Block_Type_Count = 2;
+BlockInfo[Block_Type_Count] block_types = {
+    {"Air"},
+    {"Stone", "stone.bmp"}
+};
 
 void main() {
     grax_init();
@@ -58,6 +171,15 @@ void main() {
     let R = *renderer;
     static_ui = create_layer();
     immediate_layer = *static_ui;
+
+    for 0 .. Block_Type_Count {
+        let bi = *block_types[it];
+        if bi.image_file_name {
+            bi.image = load_bitmap(concat("assets/", bi.image_file_name));
+            bi.texture = create_texture2D(bi.image);
+            set_filter(bi.texture, TextureFilter.nearest);
+        }
+    }
 
     world_cam.transform.position = {-10, 32, -10};
 
@@ -69,9 +191,61 @@ void main() {
 
 
     while grax_loop() {
+        float32 dt = deltatime();
         draw_text(vec2_zero, 0.05, "X", White);
 
-        camera_fly_control(*world_cam, 0.05);
+        static vec3 player_pos = {};
+        static vec3 player_vel = {};
+
+        if key_pressed(GLFW_KEY_ENTER) {
+            player_pos = world_cam.transform.position;
+            is_freecam = !is_freecam;
+        }
+        if is_freecam {
+            enable_cursor();
+            camera_fly_control(*world_cam, 0.05);
+        } else {
+            // disable_cursor();
+
+            // rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
+            // rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
+
+
+            camera_orbit_control(*world_cam, player_pos);
+
+            vec3 f = forward(world_cam.transform);
+            f = noz(make_vec(f.x, 0, f.z));
+
+            vec3 s = left(world_cam.transform);
+            s = noz(make_vec(s.x, 0, s.z));
+
+            let i = Input.wasd;
+            vec3 movement = f*i.y - s*i.x + vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
+            float32 speed = 2.0;
+            player_pos = player_pos + movement*speed*dt;
+
+            if key_pressed(GLFW_KEY_SPACE) {
+                player_vel.y += 6;
+            }
+
+            player_vel.y -= 9.8*dt;
+            player_pos = player_pos + player_vel*dt;
+
+            vec3 player_size = make_vec(0.7, 1.83, 0.7);
+
+            let disp = collide_aabb(player_pos, player_size);
+            player_pos = player_pos + disp;
+
+            vec3 norm = noz(disp);
+            float32 l = -dot(player_vel, norm);
+            if l > 0.0 {
+                player_vel = player_vel + norm * l;
+            }
+
+
+            gizmo_box(player_pos, player_size, Green);
+        }
+
 
         draw_world(R, world_cam);
 
@@ -148,7 +322,8 @@ void draw_world(DeferredRenderer* R, Camera cam) {
 
         vec3 pos = make_vec(chunk.coord)*size;
         let matrix = make_mat4(pos, 1);
-        uint32 gl_texture = white_texture.gl_handle;
+        // uint32 gl_texture = white_texture.gl_handle;
+        uint32 gl_texture = block_types[1].texture.gl_handle;
         draw_geometry(R, chunk.db, pbr, gl_texture, matrix);
 
         if true { // debug draw
