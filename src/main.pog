@@ -110,7 +110,11 @@ BlockInter box_inter(Box b1, b2) {
     }
 }
 
-vec3 collide_aabb(vec3 pos, size) {
+void collide_aabb(Entity* en) {
+
+    let size = en.aabb.size;
+    let pos = en.tr.position + en.aabb.center;
+
     let half_size = size * 0.5;
     let mi = make_ivec(round(pos - half_size));
     let mx = make_ivec(round(pos + half_size));
@@ -135,17 +139,23 @@ vec3 collide_aabb(vec3 pos, size) {
                 if abs(disp.y) > abs(move.y) move.y = disp.y;
                 if abs(disp.z) > abs(move.z) move.z = disp.z;
 
+                float32 l = -dot(en.vel, inter.normal);
+                if l > 0.0 {
+                    en.vel = en.vel + inter.normal * l;
+                }
+
             }
         }
     }
 
-    return move;
+    en.tr.position = en.tr.position + move;
 }
 
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
 bool is_freecam = true;
+bool is_thirdperson = false;
 
 struct BlockInfo {
     char* name;
@@ -194,24 +204,38 @@ void main() {
         float32 dt = deltatime();
         draw_text(vec2_zero, 0.05, "X", White);
 
-        static vec3 player_pos = {};
-        static vec3 player_vel = {};
+        const height = 1.83;
+        static Entity player = {
+            aabb = {center={0,-(height/2.0 - 0.2),0}, size={0.7, height, 0.7}}
+        };
 
         if key_pressed(GLFW_KEY_ENTER) {
-            player_pos = world_cam.transform.position;
+            player.tr.position = world_cam.transform.position;
             is_freecam = !is_freecam;
         }
+
+        vec2 cursor_pos = Input.mouse_pos;
+
         if is_freecam {
             enable_cursor();
             camera_fly_control(*world_cam, 0.05);
         } else {
-            // disable_cursor();
 
-            // rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
-            // rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
+            if key_pressed(GLFW_KEY_BACKSPACE) {
+                is_thirdperson = !is_thirdperson;
+            }
 
+            if is_thirdperson {
+                enable_cursor();
+                camera_orbit_control(*world_cam, player.tr.position);
+            } else {
+                disable_cursor();
+                cursor_pos = vec2_zero;
 
-            camera_orbit_control(*world_cam, player_pos);
+                rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
+                rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
+                world_cam.transform.position = player.tr.position;
+            }
 
             vec3 f = forward(world_cam.transform);
             f = noz(make_vec(f.x, 0, f.z));
@@ -219,31 +243,23 @@ void main() {
             vec3 s = left(world_cam.transform);
             s = noz(make_vec(s.x, 0, s.z));
 
+            vec3 updown = {};
+            if false  updown = vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
             let i = Input.wasd;
-            vec3 movement = f*i.y - s*i.x + vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
-            float32 speed = 2.0;
-            player_pos = player_pos + movement*speed*dt;
+            vec3 movement = f*i.y - s*i.x + updown;
+            float32 speed = 2.4;
+            player.tr.position = player.tr.position + noz(movement)*speed*dt;
 
             if key_pressed(GLFW_KEY_SPACE) {
-                player_vel.y += 6;
+                player.vel.y += 5;
             }
 
-            player_vel.y -= 9.8*dt;
-            player_pos = player_pos + player_vel*dt;
+            player.vel.y -= 9.8*dt;
+            player.tr.position = player.tr.position + player.vel*dt;
 
-            vec3 player_size = make_vec(0.7, 1.83, 0.7);
+            collide_aabb(*player);
 
-            let disp = collide_aabb(player_pos, player_size);
-            player_pos = player_pos + disp;
-
-            vec3 norm = noz(disp);
-            float32 l = -dot(player_vel, norm);
-            if l > 0.0 {
-                player_vel = player_vel + norm * l;
-            }
-
-
-            gizmo_box(player_pos, player_size, Green);
+            gizmo_box(player.tr.position + player.aabb.center, player.aabb.size, Green);
         }
 
 
@@ -252,7 +268,7 @@ void main() {
 
         update_matrices(*world_cam);
         let o = world_cam.transform.position;
-        let d = camera_ray(world_cam, vec2_zero);
+        let d = camera_ray(world_cam, cursor_pos);
 
         bool break_block(uint32 index, ivec3 coord, float32 dist) {
             if dist > 5 return false;
@@ -270,6 +286,7 @@ void main() {
 
         // traverse_voxels(o, d, break_block);
 
+        ivec3 prev_coord = {};
         let ts = start_traversal(o, d);
         while true {
             traverse(*ts);
@@ -281,9 +298,13 @@ void main() {
                 gizmo_box(make_vec(ts.coord), vec3_one, Black);
                 if mouse_pressed(Left_Mouse) {
                     set_block(ts.coord, 0);
+                } else if mouse_pressed(Right_Mouse) {
+                    set_block(prev_coord, 1);
                 }
                 break;
             }
+
+            prev_coord = ts.coord;
         }
 
 
