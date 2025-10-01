@@ -6,12 +6,18 @@ include "../grax/grax.pog";
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
 
 /* TODOs:
-    - block place
+
+    - z order traversal pattern: https://www.youtube.com/watch?v=ztkh1r1ioZo @13:40
+
 */
 
-const Chunk_Pool_Size = 4;
+const Render_Radius = 4;
+
+const Chunk_Pool_Size = Render_Radius*2 + 1;
 const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
 Chunk[Pool_Size] chunk_pool;
+
+Chunk* last_chunk_interacted_with;
 
 Chunk* get_chunk(ivec3 chunk_coord) {
     for 0 .. Pool_Size {
@@ -19,6 +25,42 @@ Chunk* get_chunk(ivec3 chunk_coord) {
         if equals(chunk.coord, chunk_coord) return chunk;
     }
     return null;
+}
+
+ivec3 block_coord(vec3 pos) return make_ivec(round(pos));
+ivec3 chunk_coord(ivec3 block_coord) return make_ivec(floor(make_vec(block_coord) / (Chunk_Size as float32)));
+ivec3 chunk_coord(vec3 pos) return chunk_coord(block_coord(pos));
+
+void ensure_chunks() {
+    ivec3 center = chunk_coord(player.tr.position);
+    center.y = 0;
+
+    Chunk*[..] old_chunks = list_create(sizeof Chunk*);
+
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        ivec3 rel = abs(chunk.coord - center);
+        if rel.x > Render_Radius
+        or rel.y > Render_Radius
+        or rel.z > Render_Radius {
+            list_add(*old_chunks, *chunk);
+        }
+    }
+
+    int32 s = Render_Radius;
+    for z: -s .. s+1 for x: -s .. s+1 {
+        ivec3 coord = center + {x, 0, z};
+
+        Chunk* chunk = get_chunk(coord);
+        if chunk == null {
+            chunk = @(list_pop(old_chunks) as Chunk**);
+            init_chunk(chunk, coord);
+            goto done;
+        }
+    }
+
+    done:
+    list_delete(old_chunks);
 }
 
 uint16 get_block(ivec3 coord) {
@@ -41,7 +83,14 @@ void set_block(ivec3 coord, uint16 id) {
     let index = get_index(rel.x, rel.y, rel.z);
     chunk.blocks[index] = id;
     chunk.must_remesh = true;
+
+    last_chunk_interacted_with = chunk;
 }
+
+const player_height = 1.83;
+Entity player = {
+    aabb = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}}
+};
 
 struct Entity {
     Transform tr;
@@ -154,6 +203,8 @@ void collide_aabb(Entity* en) {
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
+Shader shader_voxel_chunk;
+
 bool is_freecam = true;
 bool is_thirdperson = false;
 
@@ -166,16 +217,29 @@ struct BlockInfo {
 
 }
 
-
 const Block_Type_Count = 2;
 BlockInfo[Block_Type_Count] block_types = {
     {"Air"},
     {"Stone", "stone.bmp"}
 };
 
+struct Item { uint32 id, count; }
+struct ItemInfo {
+    char* name;
+    char* image_file_name;
+    Sprite sprite;
+}
+
+const ItemInfos_Count = 2;
+ItemInfo[ItemInfos_Count] item_infos = {
+    {},
+    {"Stone", "stone.bmp"}
+};
+
 void main() {
     grax_init();
     gizmo_setup();
+    init_draw2d();
 
     let renderer = deferred_renderer_init();
     let R = *renderer;
@@ -191,23 +255,30 @@ void main() {
         }
     }
 
-    world_cam.transform.position = {-10, 32, -10};
-
-    int32 s = Chunk_Pool_Size;
-    for z: 0 .. s  for x: 0 .. s {
-        let chunk = *chunk_pool[get_index(s, x, z, 0)];
-        init_chunk(chunk, make_ivec(x, 0, z));
+    for 0 .. ItemInfos_Count {
+        let info = *item_infos[it];
+        if info.image_file_name {
+            let image = load_bitmap(concat("assets/", info.image_file_name));
+            info.sprite = make_sprite(create_texture2D(image));
+            set_filter(info.sprite.tex, TextureFilter.nearest);
+            free(image.pixels);
+        }
     }
 
+    world_cam.transform.position = {-10, 32, -10};
+
+
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        chunk.coord = {99999,99999,99999};
+    }
 
     while grax_loop() {
+        ensure_chunks();
+
         float32 dt = deltatime();
         draw_text(vec2_zero, 0.05, "X", White);
 
-        const height = 1.83;
-        static Entity player = {
-            aabb = {center={0,-(height/2.0 - 0.2),0}, size={0.7, height, 0.7}}
-        };
 
         if key_pressed(GLFW_KEY_ENTER) {
             player.tr.position = world_cam.transform.position;
@@ -220,22 +291,6 @@ void main() {
             enable_cursor();
             camera_fly_control(*world_cam, 0.05);
         } else {
-
-            if key_pressed(GLFW_KEY_BACKSPACE) {
-                is_thirdperson = !is_thirdperson;
-            }
-
-            if is_thirdperson {
-                enable_cursor();
-                camera_orbit_control(*world_cam, player.tr.position);
-            } else {
-                disable_cursor();
-                cursor_pos = vec2_zero;
-
-                rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
-                rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
-                world_cam.transform.position = player.tr.position;
-            }
 
             vec3 f = forward(world_cam.transform);
             f = noz(make_vec(f.x, 0, f.z));
@@ -259,35 +314,32 @@ void main() {
 
             collide_aabb(*player);
 
+
+            if key_pressed(GLFW_KEY_BACKSPACE) {
+                is_thirdperson = !is_thirdperson;
+            }
+
+            if is_thirdperson {
+                enable_cursor();
+                camera_orbit_control(*world_cam, player.tr.position);
+            } else {
+                disable_cursor();
+                cursor_pos = vec2_zero;
+
+                rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
+                rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
+                world_cam.transform.position = player.tr.position;
+            }
+
             gizmo_box(player.tr.position + player.aabb.center, player.aabb.size, Green);
         }
-
-
-        draw_world(R, world_cam);
-
 
         update_matrices(*world_cam);
         let o = world_cam.transform.position;
         let d = camera_ray(world_cam, cursor_pos);
-
-        bool break_block(uint32 index, ivec3 coord, float32 dist) {
-            if dist > 5 return false;
-            uint16 id = get_block(coord);
-            if id == 0 return true;
-
-            gizmo_box(make_vec(coord), vec3_one, Black);
-
-            if mouse_pressed(Left_Mouse) {
-                set_block(coord, 0);
-            }
-
-            return false;
-        }
-
-        // traverse_voxels(o, d, break_block);
-
-        ivec3 prev_coord = {};
         let ts = start_traversal(o, d);
+        ivec3 prev_coord = {};
+
         while true {
             traverse(*ts);
             float32 dist = min(min(ts.max_x, ts.max_y), ts.max_z);
@@ -298,7 +350,7 @@ void main() {
                 gizmo_box(make_vec(ts.coord), vec3_one, Black);
                 if mouse_pressed(Left_Mouse) {
                     set_block(ts.coord, 0);
-                } else if mouse_pressed(Right_Mouse) {
+                } else if mouse_released(Right_Mouse) {
                     set_block(prev_coord, 1);
                 }
                 break;
@@ -307,9 +359,32 @@ void main() {
             prev_coord = ts.coord;
         }
 
+        draw_inventory();
+
+        dispatch_sprites({scale=1} as Transform2D);
+        draw_world(R, world_cam);
 
         gizmo_dispatch();
         dispatch_layer(*static_ui, {scale=1} as Transform2D);
+    }
+}
+
+void draw_inventory() {
+    const hotbar_count = 9;
+    const hotbar_width = 1.0;
+    float32 width = hotbar_width / hotbar_count;
+
+    float32 px = 2.0 / app.window_height;
+    float32 bottom_padding = width/4.0;
+
+    Color color = opacity(Black, 0.7);
+
+    for 0 .. hotbar_count {
+        UI_Rect rect = {};
+        rect.size = {width, width};
+        rect.center = {-(hotbar_width/2.0) + width*it + width/2.0, -1 + width/2.0 + bottom_padding};
+
+        draw_rect(pad(rect, 5*px), color);
     }
 }
 
@@ -325,13 +400,25 @@ void draw_world(DeferredRenderer* R, Camera cam) {
 
     begin_geometry_pass(R, cam);
 
+    {
+        let chunk = last_chunk_interacted_with;
+        if chunk {
+            if chunk.must_remesh  update_octree(chunk);
+            if chunk.octree {
+                draw_octree(0, make_vec(chunk.coord*Chunk_Size) + vec3_one*(Chunk_Size/2.0 - 0.5), Chunk_Size, chunk.octree as Octree_Node*);
+            }
+        }
+    }
+
+    bool raster = true;
+
+    if raster;
+    else {
+        use(*shader_voxel_chunk);
+    }
+
     for 0 .. Pool_Size {
         let chunk = *chunk_pool[it];
-
-        if chunk.must_remesh {
-            triangulate_chunk(chunk);
-            chunk.must_remesh = false;
-        }
 
         Material_PBR pbr = {
             albedo = {1,1,1},
@@ -339,18 +426,31 @@ void draw_world(DeferredRenderer* R, Camera cam) {
             roughness = 0.1
         };
 
-        float32 size = Chunk_Size;
-
-        vec3 pos = make_vec(chunk.coord)*size;
-        let matrix = make_mat4(pos, 1);
         // uint32 gl_texture = white_texture.gl_handle;
         uint32 gl_texture = block_types[1].texture.gl_handle;
-        draw_geometry(R, chunk.db, pbr, gl_texture, matrix);
+
+        float32 size = Chunk_Size;
+        vec3 pos = make_vec(chunk.coord)*size;
+
+        if raster {
+            if chunk.must_remesh {
+                triangulate_chunk(chunk);
+                chunk.must_remesh = false;
+            }
+
+            draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
+        } else {
+            draw_geometry(R, R.db_inverted_box, pbr, gl_texture, make_mat4(pos + make_vec3(size/2 - 0.5), size/2));
+        }
+
 
         if true { // debug draw
-            gizmo_box(pos + vec3_one*7.5, vec3_one*size, Orange);
+            gizmo_box(pos + vec3_one*(size/2.0 - 0.5), vec3_one*size, Orange);
         }
+
+
     }
+
 
     begin_light_pass(R);
     end_frame(R);
@@ -455,6 +555,8 @@ struct Chunk {
     Mesh mesh;
     DrawBuffers db;
     bool must_remesh;
+
+    Octree_Node[..] octree;
 }
 
 int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
@@ -462,9 +564,12 @@ int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
 
 void init_chunk(Chunk* chunk, ivec3 coord) {
     chunk.coord = coord;
-    chunk.mesh = mesh_create();
-    chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
     chunk.must_remesh = true;
+
+    if chunk.db.vao == 0 {
+        chunk.mesh = mesh_create();
+        chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
+    }
 
     // for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
     //     uint16 block_id = 0;
@@ -499,15 +604,20 @@ void triangulate_chunk(Chunk* chunk) {
 
             uint16 top = 0;
             if y+1 < Chunk_Size  top = chunk.blocks[get_index(x, y+1, z)];
-
             if top == 0 {
                 mat4 matrix = make_mat4(make_vec(x, y + 0.5, z), vec3_one);
                 add_plane(*chunk.mesh, 1, 1.0, matrix);
             }
 
-            {
+            uint16 bottom = 0;
+            if y-1 >= 0  bottom = chunk.blocks[get_index(x, y-1, z)];
+            if bottom == 0 {
                 mat4 matrix = make_mat4(make_vec(x, y - 0.5, z), make_vec(-1, 1, 1));
                 add_plane(*chunk.mesh, 1, 1.0, matrix);
+            }
+
+            uint16 get_block_clamped(Chunk* chunk, int32 x, y, z) {
+                
             }
 
 
@@ -564,4 +674,76 @@ void triangulate_chunk(Chunk* chunk) {
 
     gen_normals(chunk.mesh);
     update_buffers(*chunk.db, chunk.mesh);
+}
+
+
+struct Octree_Node {
+    uint16 block_id;
+    bool is_leaf;
+}
+
+bool check_for_split(ivec3 coord, int32 size, Chunk* chunk, uint16 block_id) {
+    ivec3 mi = coord;
+    ivec3 mx = mi + make_ivec3(size);
+    for z: mi.z .. mx.z  for y: mi.y .. mx.y  for x: mi.x .. mx.x {
+        if block_id != chunk.blocks[get_index(x,y,z)] return true;
+    }
+
+    return false;
+}
+
+void gen_octree_node(Octree_Node[..]* octree, ivec3 coord, int32 size, Chunk* chunk) {
+
+    Octree_Node* node = list_append(octree);
+    node.block_id = chunk.blocks[get_index(coord.x, coord.y, coord.z)];
+    node.is_leaf = !check_for_split(coord, size, chunk, node.block_id);
+
+    if node.is_leaf return;
+
+    int32 hs = size/2;
+
+    gen_octree_node(octree, coord, hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,0,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,hs,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,0,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,hs,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,0,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,hs,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,hs,hs), hs, chunk);
+}
+
+void update_octree(Chunk* chunk) {
+    if chunk.octree == null   chunk.octree = list_create(sizeof Octree_Node);
+
+    list_clear(chunk.octree);
+    gen_octree_node(*chunk.octree, {} as ivec3, Chunk_Size, chunk);
+
+    uint32 count = list_length(chunk.octree);
+    print("Octree update: ", count, " nodes. (", count*sizeof Octree_Node, ") bytes.\n");
+}
+
+Octree_Node* draw_octree(uint32 level, vec3 pos, float32 size, Octree_Node* node) {
+
+    if node.is_leaf {
+        if node.block_id {
+            Color[] colors = { Purple, Blue, Cyan, Green, Yellow };
+            gizmo_box(pos, vec3_one*size, colors[level%colors.length]);
+        }
+        return node+1;
+
+    } else {
+
+        float32 s = size*0.5;
+        float32 q = s*0.5;
+
+        let o   = node+1;
+        let x   = draw_octree(level+1, pos + make_vec(-q,-q,-q), s, o);
+        let y   = draw_octree(level+1, pos + make_vec( q,-q,-q), s, x);
+        let z   = draw_octree(level+1, pos + make_vec(-q, q,-q), s, y);
+        let xy  = draw_octree(level+1, pos + make_vec(-q,-q, q), s, z);
+        let xz  = draw_octree(level+1, pos + make_vec( q, q,-q), s, xy);
+        let yz  = draw_octree(level+1, pos + make_vec( q,-q, q), s, xz);
+        let xyz = draw_octree(level+1, pos + make_vec(-q, q, q), s, yz);
+        return    draw_octree(level+1, pos + make_vec( q, q, q), s, xyz);
+    }
 }
