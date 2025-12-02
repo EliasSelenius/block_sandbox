@@ -217,10 +217,12 @@ struct BlockInfo {
 
 }
 
-const Block_Type_Count = 2;
+const Block_Type_Count = 4;
 BlockInfo[Block_Type_Count] block_types = {
     {"Air"},
-    {"Stone", "stone.bmp"}
+    {"Stone", "stone.bmp"},
+    {"Soil", "soil.bmp"},
+    {"Grass", "grass.bmp"}
 };
 
 struct Item { uint32 id, count; }
@@ -283,6 +285,12 @@ void main() {
         if key_pressed(GLFW_KEY_ENTER) {
             player.tr.position = world_cam.transform.position;
             is_freecam = !is_freecam;
+        }
+
+        if key_pressed('R') {
+            let sh = *R.shader_geometry;
+            delete_shader(sh);
+            @sh = load_shader(sh.name.chars);
         }
 
         vec2 cursor_pos = Input.mouse_pos;
@@ -410,11 +418,14 @@ void draw_world(DeferredRenderer* R, Camera cam) {
         }
     }
 
-    bool raster = true;
 
-    if raster;
-    else {
-        use(*shader_voxel_chunk);
+    if true { // debug draw
+        for 0 .. Pool_Size {
+            let chunk = *chunk_pool[it];
+            float32 size = Chunk_Size;
+            vec3 pos = make_vec(chunk.coord)*size;
+            gizmo_box(pos + vec3_one*(size/2.0 - 0.5), vec3_one*size, Orange);
+        }
     }
 
     for 0 .. Pool_Size {
@@ -432,35 +443,22 @@ void draw_world(DeferredRenderer* R, Camera cam) {
         float32 size = Chunk_Size;
         vec3 pos = make_vec(chunk.coord)*size;
 
-        if raster {
-            if chunk.must_remesh {
-                triangulate_chunk(chunk);
-                chunk.must_remesh = false;
-            }
-
-            draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
-        } else {
-            draw_geometry(R, R.db_inverted_box, pbr, gl_texture, make_mat4(pos + make_vec3(size/2 - 0.5), size/2));
+        if chunk.must_remesh {
+            triangulate_chunk(chunk);
+            chunk.must_remesh = false;
         }
 
-
-        if true { // debug draw
-            gizmo_box(pos + vec3_one*(size/2.0 - 0.5), vec3_one*size, Orange);
-        }
-
-
+        draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
     }
+
+
+        // use(*shader_voxel_chunk);
 
 
     begin_light_pass(R);
     end_frame(R);
 }
 
-int32 sign(float32 v) {
-    if v == 0.0 return 0;
-    if v < 0.0  return -1;
-    else        return 1;
-}
 
 // Fast Voxel Traversal Algorithm: http://www.cse.yorku.ca/~amana/research/grid.pdf
 void traverse_voxels(vec3 o,d, bool(uint32, ivec3, float32) callback) {
@@ -594,85 +592,76 @@ void init_chunk(Chunk* chunk, ivec3 coord) {
     }
 }
 
+void add_quad(Mesh* m, vec3 p, ivec3 inorm) {
+    uint32 i = list_length(m.vertices);
+    add_tri(m, i+1, i+2, i+0);
+    add_tri(m, i+3, i+2, i+1);
+
+    vec3 n = make_vec(inorm);
+
+    float32 s = n.x + n.y + n.z;
+    vec4 h = make_vec4(0.5);
+    vec4 p0 = (make_vec(0,1,0,1) - h) * s;
+    vec4 p1 = (make_vec(0,0,1,1) - h) * s;
+    vec4 p2 = (make_vec(1,1,1,1) - h) * s;
+
+    if s < 0 {
+        vec4 t = p1;
+        p1 = p0;
+        p0 = t;
+    }
+
+    vec4 cx;
+    vec4 cy;
+    vec4 cz;
+
+    if inorm.x {
+        cx = p2;
+        cy = p0;
+        cz = p1;
+    } else if inorm.y {
+        cx = p1;
+        cy = p2;
+        cz = p0;
+    } else {
+        cx = p0;
+        cy = p1;
+        cz = p2;
+    }
+
+    add_vert(m, {p + {cx.x, cy.x, cz.x} as vec3, n, {0,0}} as vertex3D);
+    add_vert(m, {p + {cx.y, cy.y, cz.y} as vec3, n, {0,1}} as vertex3D);
+    add_vert(m, {p + {cx.z, cy.z, cz.z} as vec3, n, {1,0}} as vertex3D);
+    add_vert(m, {p + {cx.w, cy.w, cz.w} as vec3, n, {1,1}} as vertex3D);
+}
+
 void triangulate_chunk(Chunk* chunk) {
     list_clear(chunk.mesh.vertices);
     list_clear(chunk.mesh.indices);
 
-    for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
+    int32 s = Chunk_Size;
+    for z: 0 .. s  for y: 0 .. s  for x: 0 .. s {
         uint16 block_id = chunk.blocks[get_index(x, y, z)];
-        if block_id {
+        if block_id == 0 continue;
 
-            uint16 top = 0;
-            if y+1 < Chunk_Size  top = chunk.blocks[get_index(x, y+1, z)];
-            if top == 0 {
-                mat4 matrix = make_mat4(make_vec(x, y + 0.5, z), vec3_one);
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
+        uint16 px = x+1 < s  ? chunk.blocks[get_index(x+1, y, z)] : 0;
+        uint16 nx = x-1 >= 0 ? chunk.blocks[get_index(x-1, y, z)] : 0;
+        uint16 py = y+1 < s  ? chunk.blocks[get_index(x, y+1, z)] : 0;
+        uint16 ny = y-1 >= 0 ? chunk.blocks[get_index(x, y-1, z)] : 0;
+        uint16 pz = z+1 < s  ? chunk.blocks[get_index(x, y, z+1)] : 0;
+        uint16 nz = z-1 >= 0 ? chunk.blocks[get_index(x, y, z-1)] : 0;
 
-            uint16 bottom = 0;
-            if y-1 >= 0  bottom = chunk.blocks[get_index(x, y-1, z)];
-            if bottom == 0 {
-                mat4 matrix = make_mat4(make_vec(x, y - 0.5, z), make_vec(-1, 1, 1));
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
-
-            uint16 get_block_clamped(Chunk* chunk, int32 x, y, z) {
-                
-            }
-
-
-            {
-                mat4 matrix =
-                    {0,1,0,0,
-                     1,0,0,0,
-                     0,0,1,0,
-                     0,0,0,1};
-
-                matrix.row4 = make_vec(x - 0.5, y, z, 1);
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
-
-            {
-                mat4 matrix =
-                    {0,-1,0,0,
-                     -1,0,0,0,
-                     0,0,1,0,
-                     0,0,0,1};
-
-                matrix.row4 = make_vec(x + 0.5, y, z, 1);
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
-
-
-            {
-                mat4 matrix =
-                    {1,0,0,0,
-                     0,0,1,0,
-                     0,1,0,0,
-                     0,0,0,1};
-
-                matrix.row4 = make_vec(x, y, z - 0.5, 1);
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
-
-
-            {
-                mat4 matrix =
-                    {1,0,0,0,
-                     0,0,-1,0,
-                     0,-1,0,0,
-                     0,0,0,1};
-
-                matrix.row4 = make_vec(x, y, z + 0.5, 1);
-                add_plane(*chunk.mesh, 1, 1.0, matrix);
-            }
-
-        }
+        if px==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 1, 0, 0));
+        if nx==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec(-1, 0, 0));
+        if py==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 1, 0));
+        if ny==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0,-1, 0));
+        if pz==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 0, 1));
+        if nz==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 0,-1));
     }
 
     // set_origin(chunk.mesh, vec3_one*7.5);
 
-    gen_normals(chunk.mesh);
+    // gen_normals(chunk.mesh);
     update_buffers(*chunk.db, chunk.mesh);
 }
 
