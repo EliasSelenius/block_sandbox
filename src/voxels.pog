@@ -1,0 +1,384 @@
+
+const Render_Radius = 4;
+
+const Chunk_Pool_Size = Render_Radius*2 + 1;
+const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
+
+const Chunk_Size = 16;
+const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
+
+Chunk[Pool_Size] chunk_pool;
+Chunk* last_chunk_interacted_with;
+
+
+struct Chunk {
+    ivec3 coord;
+    uint16[Chunk_Block_Count] blocks;
+    Mesh mesh;
+    DrawBuffers db;
+    bool must_remesh;
+
+    Octree_Node[..] octree;
+}
+
+ivec3 block_coord(vec3 pos) return make_ivec(round(pos));
+ivec3 chunk_coord(ivec3 block_coord) return make_ivec(floor(make_vec(block_coord) / (Chunk_Size as float32)));
+ivec3 chunk_coord(vec3 pos) return chunk_coord(block_coord(pos));
+
+int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
+int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
+
+uint16 get_block(ivec3 coord) {
+    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    let chunk = get_chunk(chunk_coord);
+    if chunk == null return 0;
+
+    let rel = (coord - chunk_coord*Chunk_Size);
+    let index = get_index(rel.x, rel.y, rel.z);
+    uint16 id = chunk.blocks[index];
+    return id;
+}
+
+void set_block(ivec3 coord, uint16 id) {
+    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    let chunk = get_chunk(chunk_coord);
+    if chunk == null return;
+
+    let rel = (coord - chunk_coord*Chunk_Size);
+    let index = get_index(rel.x, rel.y, rel.z);
+    chunk.blocks[index] = id;
+    chunk.must_remesh = true;
+
+    last_chunk_interacted_with = chunk;
+}
+
+Chunk* get_chunk(ivec3 chunk_coord) {
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        if equals(chunk.coord, chunk_coord) return chunk;
+    }
+    return null;
+}
+
+void ensure_chunks() {
+    ivec3 center = chunk_coord(player.tr.position);
+    center.y = 0;
+
+    Chunk*[..] old_chunks = list_create(sizeof Chunk*);
+
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        ivec3 rel = abs(chunk.coord - center);
+        if rel.x > Render_Radius
+        or rel.y > Render_Radius
+        or rel.z > Render_Radius {
+            list_add(*old_chunks, *chunk);
+        }
+    }
+
+    int32 s = Render_Radius;
+    for z: -s .. s+1 for x: -s .. s+1 {
+        ivec3 coord = center + {x, 0, z};
+
+        Chunk* chunk = get_chunk(coord);
+        if chunk == null {
+            chunk = @(list_pop(old_chunks) as Chunk**);
+            init_chunk(chunk, coord);
+            goto done;
+        }
+    }
+
+    done:
+    list_delete(old_chunks);
+}
+
+void init_chunk(Chunk* chunk, ivec3 coord) {
+    chunk.coord = coord;
+    chunk.must_remesh = true;
+
+    if chunk.db.vao == 0 {
+        chunk.mesh = mesh_create();
+        chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
+    }
+
+    // for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
+    //     uint16 block_id = 0;
+    //     if random() < -0.3 {
+    //         block_id = 1;
+    //     }
+
+    //     chunk.blocks[get_index(x, y, z)] = block_id;
+    // }
+
+    int32 s = Chunk_Size;
+    for z: 0 .. s for x: 0 .. s {
+        vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s) * 0.1;
+
+        float32 t = (gnoise(make_vec(pos, 0))+1.0)/2.0;
+        int32 height = lerp(t, 0, 16.0) as int32;
+        for y: 0 .. s {
+            uint16 block_id = 0;
+            if y <= height block_id = random_range(1, Block_Type_Count) as uint16;
+            chunk.blocks[get_index(x, y, z)] = block_id;
+        }
+    }
+}
+
+void add_quad(Mesh* m, uint16 block_id, vec3 p, ivec3 inorm) {
+    uint32 i = list_length(m.vertices);
+    add_tri(m, i+1, i+2, i+0);
+    add_tri(m, i+3, i+2, i+1);
+
+    vec3 n = make_vec(inorm);
+
+    float32 s = n.x + n.y + n.z;
+    vec4 h = make_vec4(0.5);
+    vec4 p0 = (make_vec(0,1,0,1) - h) * s;
+    vec4 p1 = (make_vec(0,0,1,1) - h) * s;
+    vec4 p2 = (make_vec(1,1,1,1) - h) * s;
+
+    if s < 0 {
+        vec4 t = p1;
+        p1 = p0;
+        p0 = t;
+    }
+
+    vec4 cx;
+    vec4 cy;
+    vec4 cz;
+
+    if inorm.x {
+        cx = p2;
+        cy = p0;
+        cz = p1;
+    } else if inorm.y {
+        cx = p1;
+        cy = p2;
+        cz = p0;
+    } else {
+        cx = p0;
+        cy = p1;
+        cz = p2;
+    }
+
+    uint32 ss_width = texture_spritesheet.width;
+    uint32 ss_size = ss_width / 16;
+    uint32 px = (block_id % ss_size) * 16;
+    uint32 py = (block_id / ss_size) * 16;
+    float32 x = (px as float32) / ss_width;
+    float32 y = (py as float32) / ss_width;
+
+    vec2 uv = {x, y};
+    float32 f = 16.0 / ss_width;
+
+    add_vert(m, {p + {cx.x, cy.x, cz.x} as vec3, n, uv + {0,0} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.y, cy.y, cz.y} as vec3, n, uv + {0,f} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.z, cy.z, cz.z} as vec3, n, uv + {f,0} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.w, cy.w, cz.w} as vec3, n, uv + {f,f} as vec2} as vertex3D);
+}
+
+void triangulate_chunk(Chunk* chunk) {
+    list_clear(chunk.mesh.vertices);
+    list_clear(chunk.mesh.indices);
+
+    int32 s = Chunk_Size;
+    for z: 0 .. s  for y: 0 .. s  for x: 0 .. s {
+        uint16 block_id = chunk.blocks[get_index(x, y, z)];
+        if block_id == 0 continue;
+
+        uint16 px = x+1 < s  ? chunk.blocks[get_index(x+1, y, z)] : 0;
+        uint16 nx = x-1 >= 0 ? chunk.blocks[get_index(x-1, y, z)] : 0;
+        uint16 py = y+1 < s  ? chunk.blocks[get_index(x, y+1, z)] : 0;
+        uint16 ny = y-1 >= 0 ? chunk.blocks[get_index(x, y-1, z)] : 0;
+        uint16 pz = z+1 < s  ? chunk.blocks[get_index(x, y, z+1)] : 0;
+        uint16 nz = z-1 >= 0 ? chunk.blocks[get_index(x, y, z-1)] : 0;
+
+        if px==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 1, 0, 0));
+        if nx==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec(-1, 0, 0));
+        if py==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 1, 0));
+        if ny==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0,-1, 0));
+        if pz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0, 1));
+        if nz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0,-1));
+    }
+
+    // set_origin(chunk.mesh, vec3_one*7.5);
+
+    // gen_normals(chunk.mesh);
+    update_buffers(*chunk.db, chunk.mesh);
+}
+
+
+
+
+
+
+
+
+
+
+
+// Fast Voxel Traversal Algorithm: http://www.cse.yorku.ca/~amana/research/grid.pdf
+void traverse_voxels(vec3 o,d, bool(uint32, ivec3, float32) callback) {
+    ivec3 coord = make_ivec(round(o));
+
+    int32 step_x = sign(d.x);
+    int32 step_y = sign(d.y);
+    int32 step_z = sign(d.z);
+
+    float32 delta_x = step_x / d.x;
+    float32 delta_y = step_y / d.y;
+    float32 delta_z = step_z / d.z;
+
+    float32 max_x = (coord.x + 0.5*step_x - o.x) / d.x;
+    float32 max_y = (coord.y + 0.5*step_y - o.y) / d.y;
+    float32 max_z = (coord.z + 0.5*step_z - o.z) / d.z;
+
+    uint32 index = 0;
+    while callback(index++, coord, min(min(max_x, max_y), max_z)) {
+        if max_x < max_y and max_x < max_z {
+            max_x += delta_x;
+            coord.x += step_x;
+        } else if max_y < max_z {
+            max_y += delta_y;
+            coord.y += step_y;
+        } else {
+            max_z += delta_z;
+            coord.z += step_z;
+        }
+    }
+}
+
+struct Voxel_Traversal_State {
+    ivec3 coord;
+
+    int32 step_x;
+    int32 step_y;
+    int32 step_z;
+
+    float32 delta_x;
+    float32 delta_y;
+    float32 delta_z;
+
+    float32 max_x;
+    float32 max_y;
+    float32 max_z;
+
+    uint32 index;
+}
+
+Voxel_Traversal_State start_traversal(vec3 o, d) {
+    Voxel_Traversal_State state = {};
+    state.coord = make_ivec(round(o));
+
+    state.step_x = sign(d.x);
+    state.step_y = sign(d.y);
+    state.step_z = sign(d.z);
+
+    state.delta_x = state.step_x / d.x;
+    state.delta_y = state.step_y / d.y;
+    state.delta_z = state.step_z / d.z;
+
+    state.max_x = (state.coord.x + 0.5*state.step_x - o.x) / d.x;
+    state.max_y = (state.coord.y + 0.5*state.step_y - o.y) / d.y;
+    state.max_z = (state.coord.z + 0.5*state.step_z - o.z) / d.z;
+
+    state.index = 0;
+    return state;
+}
+
+void traverse(Voxel_Traversal_State* state) {
+    state.index++;
+
+    if state.max_x < state.max_y and state.max_x < state.max_z {
+        state.max_x += state.delta_x;
+        state.coord.x += state.step_x;
+    } else if state.max_y < state.max_z {
+        state.max_y += state.delta_y;
+        state.coord.y += state.step_y;
+    } else {
+        state.max_z += state.delta_z;
+        state.coord.z += state.step_z;
+    }
+}
+
+
+
+
+
+
+
+
+
+
+
+struct Octree_Node {
+    uint16 block_id;
+    bool is_leaf;
+}
+
+bool check_for_split(ivec3 coord, int32 size, Chunk* chunk, uint16 block_id) {
+    ivec3 mi = coord;
+    ivec3 mx = mi + make_ivec3(size);
+    for z: mi.z .. mx.z  for y: mi.y .. mx.y  for x: mi.x .. mx.x {
+        if block_id != chunk.blocks[get_index(x,y,z)] return true;
+    }
+
+    return false;
+}
+
+void gen_octree_node(Octree_Node[..]* octree, ivec3 coord, int32 size, Chunk* chunk) {
+
+    Octree_Node* node = list_append(octree);
+    node.block_id = chunk.blocks[get_index(coord.x, coord.y, coord.z)];
+    node.is_leaf = !check_for_split(coord, size, chunk, node.block_id);
+
+    if node.is_leaf return;
+
+    int32 hs = size/2;
+
+    gen_octree_node(octree, coord, hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,0,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,hs,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,0,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,hs,0), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,0,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(0,hs,hs), hs, chunk);
+    gen_octree_node(octree, coord + make_ivec(hs,hs,hs), hs, chunk);
+}
+
+void update_octree(Chunk* chunk) {
+    if chunk.octree == null   chunk.octree = list_create(sizeof Octree_Node);
+
+    list_clear(chunk.octree);
+    gen_octree_node(*chunk.octree, {} as ivec3, Chunk_Size, chunk);
+
+    uint32 count = list_length(chunk.octree);
+    print("Octree update: ", count, " nodes. (", count*sizeof Octree_Node, ") bytes.\n");
+}
+
+Octree_Node* draw_octree(uint32 level, vec3 pos, float32 size, Octree_Node* node) {
+
+    if node.is_leaf {
+        if node.block_id {
+            Color[] colors = { Purple, Blue, Cyan, Green, Yellow };
+            gizmo_box(pos, vec3_one*size, colors[level%colors.length]);
+        }
+        return node+1;
+
+    } else {
+
+        float32 s = size*0.5;
+        float32 q = s*0.5;
+
+        let o   = node+1;
+        let x   = draw_octree(level+1, pos + make_vec(-q,-q,-q), s, o);
+        let y   = draw_octree(level+1, pos + make_vec( q,-q,-q), s, x);
+        let z   = draw_octree(level+1, pos + make_vec(-q, q,-q), s, y);
+        let xy  = draw_octree(level+1, pos + make_vec(-q,-q, q), s, z);
+        let xz  = draw_octree(level+1, pos + make_vec( q, q,-q), s, xy);
+        let yz  = draw_octree(level+1, pos + make_vec( q,-q, q), s, xz);
+        let xyz = draw_octree(level+1, pos + make_vec(-q, q, q), s, yz);
+        return    draw_octree(level+1, pos + make_vec( q, q, q), s, xyz);
+    }
+}
+
