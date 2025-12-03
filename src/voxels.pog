@@ -28,8 +28,16 @@ ivec3 chunk_coord(vec3 pos) return chunk_coord(block_coord(pos));
 int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
 int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
 
+Chunk* get_chunk(ivec3 chunk_coord) {
+    for 0 .. Pool_Size {
+        let chunk = *chunk_pool[it];
+        if equals(chunk.coord, chunk_coord) return chunk;
+    }
+    return null;
+}
+
 uint16 get_block(ivec3 coord) {
-    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    ivec3 chunk_coord = chunk_coord(coord);
     let chunk = get_chunk(chunk_coord);
     if chunk == null return 0;
 
@@ -40,7 +48,7 @@ uint16 get_block(ivec3 coord) {
 }
 
 void set_block(ivec3 coord, uint16 id) {
-    ivec3 chunk_coord = make_ivec(floor(make_vec(coord) / (Chunk_Size as float32)));
+    ivec3 chunk_coord = chunk_coord(coord);
     let chunk = get_chunk(chunk_coord);
     if chunk == null return;
 
@@ -50,14 +58,6 @@ void set_block(ivec3 coord, uint16 id) {
     chunk.must_remesh = true;
 
     last_chunk_interacted_with = chunk;
-}
-
-Chunk* get_chunk(ivec3 chunk_coord) {
-    for 0 .. Pool_Size {
-        let chunk = *chunk_pool[it];
-        if equals(chunk.coord, chunk_coord) return chunk;
-    }
-    return null;
 }
 
 void ensure_chunks() {
@@ -218,86 +218,38 @@ void triangulate_chunk(Chunk* chunk) {
 
 
 // Fast Voxel Traversal Algorithm: http://www.cse.yorku.ca/~amana/research/grid.pdf
-void traverse_voxels(vec3 o,d, bool(uint32, ivec3, float32) callback) {
-    ivec3 coord = make_ivec(round(o));
-
-    int32 step_x = sign(d.x);
-    int32 step_y = sign(d.y);
-    int32 step_z = sign(d.z);
-
-    float32 delta_x = step_x / d.x;
-    float32 delta_y = step_y / d.y;
-    float32 delta_z = step_z / d.z;
-
-    float32 max_x = (coord.x + 0.5*step_x - o.x) / d.x;
-    float32 max_y = (coord.y + 0.5*step_y - o.y) / d.y;
-    float32 max_z = (coord.z + 0.5*step_z - o.z) / d.z;
-
-    uint32 index = 0;
-    while callback(index++, coord, min(min(max_x, max_y), max_z)) {
-        if max_x < max_y and max_x < max_z {
-            max_x += delta_x;
-            coord.x += step_x;
-        } else if max_y < max_z {
-            max_y += delta_y;
-            coord.y += step_y;
-        } else {
-            max_z += delta_z;
-            coord.z += step_z;
-        }
-    }
-}
-
 struct Voxel_Traversal_State {
-    ivec3 coord;
-
-    int32 step_x;
-    int32 step_y;
-    int32 step_z;
-
-    float32 delta_x;
-    float32 delta_y;
-    float32 delta_z;
-
-    float32 max_x;
-    float32 max_y;
-    float32 max_z;
-
+    ivec3 coord, step;
+    vec3 delta, max;
     uint32 index;
 }
 
+float32 travel_distance(Voxel_Traversal_State ts) return min(min(ts.max.x, ts.max.y), ts.max.z);
+
 Voxel_Traversal_State start_traversal(vec3 o, d) {
-    Voxel_Traversal_State state = {};
-    state.coord = make_ivec(round(o));
+    Voxel_Traversal_State ts = {};
+    ts.coord = make_ivec(round(o));
 
-    state.step_x = sign(d.x);
-    state.step_y = sign(d.y);
-    state.step_z = sign(d.z);
+    ts.step = sign(d);
+    ts.delta = make_vec(ts.step) / d;
+    ts.max = (make_vec(ts.coord) + make_vec(ts.step)*0.5 - o) / d;
 
-    state.delta_x = state.step_x / d.x;
-    state.delta_y = state.step_y / d.y;
-    state.delta_z = state.step_z / d.z;
-
-    state.max_x = (state.coord.x + 0.5*state.step_x - o.x) / d.x;
-    state.max_y = (state.coord.y + 0.5*state.step_y - o.y) / d.y;
-    state.max_z = (state.coord.z + 0.5*state.step_z - o.z) / d.z;
-
-    state.index = 0;
-    return state;
+    ts.index = 0;
+    return ts;
 }
 
-void traverse(Voxel_Traversal_State* state) {
-    state.index++;
+void traverse(Voxel_Traversal_State* ts) {
+    ts.index++;
 
-    if state.max_x < state.max_y and state.max_x < state.max_z {
-        state.max_x += state.delta_x;
-        state.coord.x += state.step_x;
-    } else if state.max_y < state.max_z {
-        state.max_y += state.delta_y;
-        state.coord.y += state.step_y;
+    if ts.max.x < ts.max.y and ts.max.x < ts.max.z {
+        ts.max.x += ts.delta.x;
+        ts.coord.x += ts.step.x;
+    } else if ts.max.y < ts.max.z {
+        ts.max.y += ts.delta.y;
+        ts.coord.y += ts.step.y;
     } else {
-        state.max_z += state.delta_z;
-        state.coord.z += state.step_z;
+        ts.max.z += ts.delta.z;
+        ts.coord.z += ts.step.z;
     }
 }
 

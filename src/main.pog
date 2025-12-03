@@ -33,34 +33,6 @@ struct BlockInter {
     float32 depth;
 }
 
-BlockInter collide(vec3 pos) {
-    let coord = make_ivec(round(pos));
-    let id = get_block(coord);
-    if id == 0 return { vec3_zero, 0 };
-
-    let r = pos - make_vec(coord);
-    let a = abs(r);
-    if a.x > a.y and a.x > a.z {
-        return { vec3_unit_x*sign(r.x), 0.5 - a.x };
-    } else if a.y > a.z {
-        return { vec3_unit_y*sign(r.y), 0.5 - a.y };
-    } else {
-        return { vec3_unit_z*sign(r.z), 0.5 - a.z };
-    }
-}
-
-BlockInter block_normal(vec3 pos, block_pos) {
-    let r = pos - block_pos;
-    let a = abs(r);
-    if a.x > a.y and a.x > a.z {
-        return { vec3_unit_x*sign(r.x), 0.5 - a.x };
-    } else if a.y > a.z {
-        return { vec3_unit_y*sign(r.y), 0.5 - a.y };
-    } else {
-        return { vec3_unit_z*sign(r.z), 0.5 - a.z };
-    }
-}
-
 struct Box { vec3 center, size; }
 
 Box box_overlap(vec3 p1, s1, p2, s2) {
@@ -69,8 +41,8 @@ Box box_overlap(vec3 p1, s1, p2, s2) {
     vec3 min2 = p2 - s2*0.5;
     vec3 max2 = p2 + s2*0.5;
 
-    vec3 min3 = {max(min1.x, min2.x), max(min1.y, min2.y), max(min1.z, min2.z)};
-    vec3 max3 = {min(max1.x, max2.x), min(max1.y, max2.y), min(max1.z, max2.z)};
+    vec3 min3 = max(min1, min2);
+    vec3 max3 = min(max1, max2);
 
     return { (min3 + max3) * 0.5, max3 - min3 };
 }
@@ -297,7 +269,7 @@ void main() {
 
         while true {
             traverse(*ts);
-            float32 dist = min(min(ts.max_x, ts.max_y), ts.max_z);
+            float32 dist = travel_distance(ts);
             if dist > 5 break;
 
             uint16 id = get_block(ts.coord);
