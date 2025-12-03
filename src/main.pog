@@ -9,6 +9,10 @@ include "../grax/grax.pog";
 
     - z order traversal pattern: https://www.youtube.com/watch?v=ztkh1r1ioZo @13:40
 
+    - age of sails skybox
+    - items as entities
+    - inventory
+
 */
 
 const Render_Radius = 4;
@@ -205,6 +209,8 @@ Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
 Shader shader_voxel_chunk;
 
+Texture2D texture_spritesheet;
+
 bool is_freecam = true;
 bool is_thirdperson = false;
 
@@ -248,14 +254,30 @@ void main() {
     static_ui = create_layer();
     immediate_layer = *static_ui;
 
+    uint32 ss_size = (floorf(sqrtf(Block_Type_Count as float32)) + 1) as uint32;
+    Image spritesheet = {};
+    spritesheet.width = ss_size * 16;
+    spritesheet.height = ss_size * 16;
+    spritesheet.pixels = calloc(spritesheet.width * spritesheet.height, sizeof Color);
+
     for 0 .. Block_Type_Count {
         let bi = *block_types[it];
         if bi.image_file_name {
             bi.image = load_bitmap(concat("assets/", bi.image_file_name));
+
+            uint32 x = (it % ss_size) * 16;
+            uint32 y = (it / ss_size) * 16;
+
+            image_blit(spritesheet, bi.image, x, y);
+
             bi.texture = create_texture2D(bi.image);
             set_filter(bi.texture, TextureFilter.nearest);
         }
     }
+
+    texture_spritesheet = create_texture2D(spritesheet);
+    set_filter(texture_spritesheet, TextureFilter.nearest);
+    free(spritesheet.pixels);
 
     for 0 .. ItemInfos_Count {
         let info = *item_infos[it];
@@ -408,7 +430,7 @@ void draw_world(DeferredRenderer* R, Camera cam) {
 
     begin_geometry_pass(R, cam);
 
-    {
+    if false {
         let chunk = last_chunk_interacted_with;
         if chunk {
             if chunk.must_remesh  update_octree(chunk);
@@ -419,7 +441,7 @@ void draw_world(DeferredRenderer* R, Camera cam) {
     }
 
 
-    if true { // debug draw
+    if false { // debug draw
         for 0 .. Pool_Size {
             let chunk = *chunk_pool[it];
             float32 size = Chunk_Size;
@@ -438,7 +460,8 @@ void draw_world(DeferredRenderer* R, Camera cam) {
         };
 
         // uint32 gl_texture = white_texture.gl_handle;
-        uint32 gl_texture = block_types[1].texture.gl_handle;
+        // uint32 gl_texture = block_types[1].texture.gl_handle;
+        uint32 gl_texture = texture_spritesheet.gl_handle;
 
         float32 size = Chunk_Size;
         vec3 pos = make_vec(chunk.coord)*size;
@@ -586,13 +609,13 @@ void init_chunk(Chunk* chunk, ivec3 coord) {
         int32 height = lerp(t, 0, 16.0) as int32;
         for y: 0 .. s {
             uint16 block_id = 0;
-            if y <= height block_id = 1;
+            if y <= height block_id = random_range(1, Block_Type_Count) as uint16;
             chunk.blocks[get_index(x, y, z)] = block_id;
         }
     }
 }
 
-void add_quad(Mesh* m, vec3 p, ivec3 inorm) {
+void add_quad(Mesh* m, uint16 block_id, vec3 p, ivec3 inorm) {
     uint32 i = list_length(m.vertices);
     add_tri(m, i+1, i+2, i+0);
     add_tri(m, i+3, i+2, i+1);
@@ -629,10 +652,20 @@ void add_quad(Mesh* m, vec3 p, ivec3 inorm) {
         cz = p2;
     }
 
-    add_vert(m, {p + {cx.x, cy.x, cz.x} as vec3, n, {0,0}} as vertex3D);
-    add_vert(m, {p + {cx.y, cy.y, cz.y} as vec3, n, {0,1}} as vertex3D);
-    add_vert(m, {p + {cx.z, cy.z, cz.z} as vec3, n, {1,0}} as vertex3D);
-    add_vert(m, {p + {cx.w, cy.w, cz.w} as vec3, n, {1,1}} as vertex3D);
+    uint32 ss_width = texture_spritesheet.width;
+    uint32 ss_size = ss_width / 16;
+    uint32 px = (block_id % ss_size) * 16;
+    uint32 py = (block_id / ss_size) * 16;
+    float32 x = (px as float32) / ss_width;
+    float32 y = (py as float32) / ss_width;
+
+    vec2 uv = {x, y};
+    float32 f = 16.0 / ss_width;
+
+    add_vert(m, {p + {cx.x, cy.x, cz.x} as vec3, n, uv + {0,0} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.y, cy.y, cz.y} as vec3, n, uv + {0,f} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.z, cy.z, cz.z} as vec3, n, uv + {f,0} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.w, cy.w, cz.w} as vec3, n, uv + {f,f} as vec2} as vertex3D);
 }
 
 void triangulate_chunk(Chunk* chunk) {
@@ -651,12 +684,12 @@ void triangulate_chunk(Chunk* chunk) {
         uint16 pz = z+1 < s  ? chunk.blocks[get_index(x, y, z+1)] : 0;
         uint16 nz = z-1 >= 0 ? chunk.blocks[get_index(x, y, z-1)] : 0;
 
-        if px==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 1, 0, 0));
-        if nx==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec(-1, 0, 0));
-        if py==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 1, 0));
-        if ny==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0,-1, 0));
-        if pz==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 0, 1));
-        if nz==0 add_quad(*chunk.mesh, make_vec(x,y,z), make_ivec( 0, 0,-1));
+        if px==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 1, 0, 0));
+        if nx==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec(-1, 0, 0));
+        if py==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 1, 0));
+        if ny==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0,-1, 0));
+        if pz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0, 1));
+        if nz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0,-1));
     }
 
     // set_origin(chunk.mesh, vec3_one*7.5);
