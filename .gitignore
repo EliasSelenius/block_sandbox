@@ -6,3 +6,4 @@ output.g.c
 output.lib
 output.pdb
 output.rdi
+shader_debug_log_*.txt

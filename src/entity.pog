@@ -1,0 +1,152 @@
+
+const player_height = 1.83;
+Entity player = {
+    aabb = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}}
+};
+
+struct Entity {
+    Transform tr;
+    Box aabb;
+
+    vec3 vel;
+
+    Item item_stack;
+}
+
+struct World {
+    Entity[..] entity_pool;
+}
+
+World world = {
+    entity_pool = list_create(sizeof Entity)
+};
+
+Entity* spawn_item(vec3 pos, vel, uint32 item_id, count) {
+    Entity* en = list_append(*world.entity_pool);
+    en.aabb = {vec3_zero, vec3_one*0.25};
+    en.item_stack = {item_id, count};
+    en.tr = transform_default();
+    en.tr.position = pos;
+    en.vel = vel;
+    return en;
+}
+
+struct BlockInter {
+    vec3 normal;
+    float32 depth;
+}
+
+struct Box { vec3 center, size; }
+
+Box box_overlap(vec3 p1, s1, p2, s2) {
+    vec3 min1 = p1 - s1*0.5;
+    vec3 max1 = p1 + s1*0.5;
+    vec3 min2 = p2 - s2*0.5;
+    vec3 max2 = p2 + s2*0.5;
+
+    vec3 min3 = max(min1, min2);
+    vec3 max3 = min(max1, max2);
+
+    return { (min3 + max3) * 0.5, max3 - min3 };
+}
+
+BlockInter box_inter(Box b1, b2) {
+    let o = box_overlap(b1.center, b1.size, b2.center, b2.size);
+    let s = o.size;
+    let r = b1.center - b2.center;
+    if s.x < s.y and s.x < s.z {
+        return { vec3_unit_x*sign(r.x), s.x };
+    } else if s.y < s.z {
+        return { vec3_unit_y*sign(r.y), s.y };
+    } else {
+        return { vec3_unit_z*sign(r.z), s.z };
+    }
+}
+
+void collide_aabb(Entity* en) {
+
+    let size = en.aabb.size;
+    let pos = en.tr.position + en.aabb.center;
+
+    let half_size = size * 0.5;
+    let mi = make_ivec(round(pos - half_size));
+    let mx = make_ivec(round(pos + half_size));
+
+    vec3 move = {};
+
+    for z: mi.z .. mx.z+1 {
+        for y: mi.y .. mx.y+1 {
+            for x: mi.x .. mx.x+1 {
+                let id = get_block(make_ivec(x, y, z));
+                if id == 0 continue;
+
+                vec3 block_pos = make_vec(x,y,z);
+                gizmo_box(block_pos, vec3_one, Green);
+
+                let box = box_overlap(pos, size, block_pos, vec3_one);
+                gizmo_box(box.center, box.size, Blue);
+
+                let inter = box_inter({pos,size} as Box, {block_pos,vec3_one} as Box);
+                let disp = inter.normal*inter.depth;
+                if abs(disp.x) > abs(move.x) move.x = disp.x;
+                if abs(disp.y) > abs(move.y) move.y = disp.y;
+                if abs(disp.z) > abs(move.z) move.z = disp.z;
+
+                float32 l = -dot(en.vel, inter.normal);
+                if l > 0.0 {
+                    en.vel = en.vel + inter.normal * l;
+                }
+
+            }
+        }
+    }
+
+    en.tr.position = en.tr.position + move;
+}
+
+
+
+void entity_update(Entity* en, float32 dt) {
+    en.vel.y -= 9.8*dt;
+    en.tr.position = en.tr.position + en.vel*dt;
+
+    collide_aabb(en);
+
+    if en.item_stack.id != 0 {
+        if sqdist(player.tr.position, en.tr.position) < sq(3) {
+            // look_at(*en.tr, player.tr.position);
+        } else {
+        }
+            rotate(*en.tr, vec3_unit_y, Pi*dt);
+    }
+
+
+    gizmo_box(en.tr.position + en.aabb.center, en.aabb.size, White);
+}
+
+void world_update(World* w, float32 dt) {
+    for 0 .. list_length(w.entity_pool) {
+        let en = *w.entity_pool[it];
+        entity_update(en, dt);
+    }
+}
+
+void world_draw(DeferredRenderer* R, World* w) {
+    for 0 .. list_length(w.entity_pool) {
+        let en = *w.entity_pool[it];
+
+
+
+        mat4 model = to_matrix(en.tr);
+        update_buffer(R.ubo_model.buffer_id, sizeof mat4, *model);
+
+        bind_texture2D(white_texture.gl_handle, 0);
+        set_uniform("albedo_color", vec3_one);
+        set_uniform("metallic",     0.0);
+        set_uniform("roughness",    0.0);
+
+        glDisable(GL_CULL_FACE);
+        draw_elements(db_quad3D);
+        glEnable(GL_CULL_FACE);
+    }
+}

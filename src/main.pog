@@ -2,7 +2,9 @@
 include "../plang/common/builtin/types.pog";
 
 include "../grax/grax.pog";
-include "src/voxels.pog"
+include "src/voxels.pog";
+include "src/entity.pog";
+
 
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
 
@@ -10,96 +12,13 @@ include "src/voxels.pog"
 
     - z order traversal pattern: https://www.youtube.com/watch?v=ztkh1r1ioZo @13:40
 
-    - age of sails skybox
     - items as entities
     - inventory
+    - render tools in hand
+    - view bobbing
 
 */
 
-const player_height = 1.83;
-Entity player = {
-    aabb = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}}
-};
-
-struct Entity {
-    Transform tr;
-    Box aabb;
-
-    vec3 vel;
-}
-
-struct BlockInter {
-    vec3 normal;
-    float32 depth;
-}
-
-struct Box { vec3 center, size; }
-
-Box box_overlap(vec3 p1, s1, p2, s2) {
-    vec3 min1 = p1 - s1*0.5;
-    vec3 max1 = p1 + s1*0.5;
-    vec3 min2 = p2 - s2*0.5;
-    vec3 max2 = p2 + s2*0.5;
-
-    vec3 min3 = max(min1, min2);
-    vec3 max3 = min(max1, max2);
-
-    return { (min3 + max3) * 0.5, max3 - min3 };
-}
-
-BlockInter box_inter(Box b1, b2) {
-    let o = box_overlap(b1.center, b1.size, b2.center, b2.size);
-    let s = o.size;
-    let r = b1.center - b2.center;
-    if s.x < s.y and s.x < s.z {
-        return { vec3_unit_x*sign(r.x), s.x };
-    } else if s.y < s.z {
-        return { vec3_unit_y*sign(r.y), s.y };
-    } else {
-        return { vec3_unit_z*sign(r.z), s.z };
-    }
-}
-
-void collide_aabb(Entity* en) {
-
-    let size = en.aabb.size;
-    let pos = en.tr.position + en.aabb.center;
-
-    let half_size = size * 0.5;
-    let mi = make_ivec(round(pos - half_size));
-    let mx = make_ivec(round(pos + half_size));
-
-    vec3 move = {};
-
-    for z: mi.z .. mx.z+1 {
-        for y: mi.y .. mx.y+1 {
-            for x: mi.x .. mx.x+1 {
-                let id = get_block(make_ivec(x, y, z));
-                if id == 0 continue;
-
-                vec3 block_pos = make_vec(x,y,z);
-                gizmo_box(block_pos, vec3_one, Green);
-
-                let box = box_overlap(pos, size, block_pos, vec3_one);
-                gizmo_box(box.center, box.size, Blue);
-
-                let inter = box_inter({pos,size} as Box, {block_pos,vec3_one} as Box);
-                let disp = inter.normal*inter.depth;
-                if abs(disp.x) > abs(move.x) move.x = disp.x;
-                if abs(disp.y) > abs(move.y) move.y = disp.y;
-                if abs(disp.z) > abs(move.z) move.z = disp.z;
-
-                float32 l = -dot(en.vel, inter.normal);
-                if l > 0.0 {
-                    en.vel = en.vel + inter.normal * l;
-                }
-
-            }
-        }
-    }
-
-    en.tr.position = en.tr.position + move;
-}
 
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
@@ -107,6 +26,8 @@ Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 Shader shader_voxel_chunk;
 
 Texture2D texture_spritesheet;
+
+DrawBuffers db_quad3D;
 
 bool is_freecam = true;
 bool is_thirdperson = false;
@@ -117,7 +38,6 @@ struct BlockInfo {
     char* image_file_name;
     Image image;
     Texture2D texture;
-
 }
 
 const Block_Type_Count = 4;
@@ -148,8 +68,27 @@ void main() {
 
     let renderer = deferred_renderer_init();
     let R = *renderer;
+    R.sun_dir = {1, 0, 0};
+    R.sun_radiance = {1, 1, 1};
+    R.sun_ambient_factor = 0.05;
+
     static_ui = create_layer();
     immediate_layer = *static_ui;
+
+    {
+        float32 h = 0.5;
+        float32 l = -h;
+        vertex3D[] verts = {
+            {{l, l, 0}, vec3_unit_z, {0,0}},
+            {{l, h, 0}, vec3_unit_z, {0,1}},
+            {{h, l, 0}, vec3_unit_z, {1,0}},
+            {{h, h, 0}, vec3_unit_z, {1,1}}
+        };
+
+        uint32[] inds = { 0,2,1, 1,2,3 };
+
+        db_quad3D = create_draw_buffers(verts, inds);
+    }
 
     uint32 ss_size = (floorf(sqrtf(Block_Type_Count as float32)) + 1) as uint32;
     Image spritesheet = {};
@@ -246,6 +185,11 @@ void main() {
                 is_thirdperson = !is_thirdperson;
             }
 
+            if key_pressed('Q') {
+                vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
+                spawn_item(player.tr.position, look_dir*4, 1, 1);
+            }
+
             if is_thirdperson {
                 enable_cursor();
                 camera_orbit_control(*world_cam, player.tr.position);
@@ -286,6 +230,8 @@ void main() {
             prev_coord = ts.coord;
         }
 
+        world_update(*world, dt);
+
         draw_inventory();
 
         dispatch_sprites({scale=1} as Transform2D);
@@ -317,15 +263,16 @@ void draw_inventory() {
 
 void draw_world(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
-    // R.sun_dir = { cos(time), 0.7, sin(time) };
-
-    R.sun_dir = noz(forward(cam.transform) * -1 + make_vec(0, 3, 0));
+    R.sun_dir = { cos(time), 0.7, sin(time) };
+    // R.sun_dir = noz(forward(cam.transform));
 
     float32 sr = 10;
     R.sun_radiance = { sr, sr, sr };
     R.sun_ambient_factor = 0.05;
 
     begin_geometry_pass(R, cam);
+
+    world_draw(R, *world);
 
     if false {
         let chunk = last_chunk_interacted_with;
