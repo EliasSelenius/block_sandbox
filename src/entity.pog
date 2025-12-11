@@ -185,6 +185,20 @@ Item* get_first_empty_slot(Inventory* inv) {
     return null;
 }
 
+int32 get_slot_index_for(Inventory* inv, uint32 item_id) {
+    for 0 .. inv.rows*inv.cols {
+        Item item = inv.items[it];
+        if item.id == item_id and item.count != 0  return it;
+    }
+
+    for 0 .. inv.rows*inv.cols {
+        Item item = inv.items[it];
+        if !is_item(item) return it;
+    }
+
+    return -1;
+}
+
 bool add_item(Inventory* inv, Item item) {
     for 0 .. inv.rows*inv.cols {
         Item* slot = *inv.items[it];
@@ -202,6 +216,277 @@ bool add_item(Inventory* inv, Item item) {
 
     return false;
 }
+
+
+struct UI_Item {
+    Item* item;
+    UI_Rect rect;
+    vec2 pos;
+}
+
+struct UI_Slots {
+    Inventory* inv;
+    UI_Item* elements;
+    uint32 elements_count;
+}
+
+struct UI_Inventory_State {
+    Inventory* hotbar;
+    Inventory* backpack;
+    Inventory* chest;
+    UI_Item[..] ui_items;
+
+    UI_Slots slots_hotbar;
+    UI_Slots slots_backpack;
+    UI_Slots slots_chest;
+
+    UI_Item select_slot;
+
+    Item select_item;
+    vec2 select_item_pos;
+}
+
+UI_Inventory_State ui_inventory_state;
+void open_inventory(Inventory* hotbar, backpack, chest) {
+    player_backpack_open = true;
+
+    let state = *ui_inventory_state;
+
+    state.select_slot.item = *state.select_item;
+
+    if state.ui_items == null  state.ui_items = list_create(sizeof UI_Item);
+    list_clear(state.ui_items);
+
+    state.hotbar = hotbar;
+    state.backpack = backpack;
+    state.chest = chest;
+
+    const hotbar_width = 1.2;
+    float32 width = hotbar_width / hotbar.cols;
+
+    float32 px = 2.0 / app.window_height;
+    float32 bottom_padding = width/6.0;
+
+    UI_Rect hotbar_rect = {};
+    hotbar_rect.size = {hotbar_width, width};
+    hotbar_rect.center = {0, -1 + width/2.0 + bottom_padding};
+
+    UI_Rect backpack_rect = {};
+    backpack_rect.size = { backpack.cols, backpack.rows } * {width, width};
+
+    accum_ui_elements(state, hotbar_rect, hotbar);
+    accum_ui_elements(state, backpack_rect, backpack);
+
+
+
+    prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
+    prepare_elements(backpack_rect, *state.slots_backpack, backpack);
+    // prepare_elements(*slots_chest, chest);
+}
+
+void accum_ui_elements(UI_Inventory_State* state, UI_Rect inv_rect, Inventory* inv) {
+    for y: 0 .. inv.rows  for x: 0 .. inv.cols {
+        UI_Rect slot_rect = grid(inv_rect, inv.rows, inv.cols, x, y);
+
+        UI_Item ui_item = {};
+        ui_item.item = inv_item(inv, x, y);
+        ui_item.rect = slot_rect;
+        list_add(*state.ui_items, *ui_item);
+    }
+}
+
+void prepare_elements(UI_Rect rect, UI_Slots* slots, Inventory* inv) {
+    slots.inv = inv;
+
+    uint32 rows = slots.inv.rows;
+    uint32 cols = slots.inv.cols;
+
+    slots.elements_count = rows*cols;
+    slots.elements = realloc(slots.elements, slots.elements_count * sizeof UI_Item);
+
+    uint32 index = 0;
+    for y: 0 .. rows  for x: 0 .. cols {
+        UI_Rect slot_rect = grid(rect, rows, cols, x, y);
+
+        UI_Item slot = {};
+        slot.rect = slot_rect;
+        slot.item = *inv.items[index];
+
+        slots.elements[index] = slot;
+        index++;
+    }
+}
+
+void stack_item(UI_Item* dst, src) {
+
+    if dst.item.id == src.item.id {
+        dst.item.count += src.item.count;
+        src.item.count = 0;
+        src.item.id = 0;
+    } else {
+        Item temp = @dst.item;
+        @dst.item = @src.item;
+        @src.item = temp;
+    }
+
+    vec2 temp_pos = dst.pos;
+    dst.pos = src.pos;
+    src.pos = temp_pos;
+}
+
+void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
+    float32 dt = deltatime();
+    float32 px = 2.0 / app.window_height;
+
+    UI_Item* hover_slot = null;
+    for 0 .. slots.elements_count {
+        UI_Item* elm = *slots.elements[it];
+        if hover(elm.rect, Input.mouse_pos) {
+            hover_slot = elm;
+        }
+
+        Color color = opacity(Black, 0.7);
+        float32 padding = 4*px;
+        draw_rect(pad(elm.rect, padding), color);
+
+        UI_Rect item_rect = {elm.pos, elm.rect.size};
+        draw_item(item_rect, @elm.item);
+
+        elm.pos = exp_decay(elm.pos, elm.rect.center, 10, dt);
+    }
+
+    if hover_slot {
+        if key_down(Key.left_shift) {
+            int32 index = get_slot_index_for(next.inv, hover_slot.item.id);
+            if index != -1 {
+                UI_Item* slot = *next.elements[index];
+                draw_rect(slot.rect, White);
+                if mouse_pressed(MouseButton.Left) {
+                    stack_item(slot, hover_slot);
+                }
+            }
+        } else {
+
+            if mouse_pressed(MouseButton.Left) {
+
+                /*
+                    pickup  placedown  swap
+                */
+
+                if is_item(state.select_item) { // placedown
+
+                } else { // pickup
+                    // state.select_item_pos = Input.mouse_pos;
+                }
+
+                stack_item(hover_slot, *state.select_slot);
+            }
+        }
+
+    }
+}
+
+void draw_inventory() {
+    float32 dt = deltatime();
+    let state = *ui_inventory_state;
+
+    draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
+    draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
+
+    if is_item(state.select_item) {
+        UI_Rect item_rect = {state.select_slot.pos, {0.133,0.133}};
+        draw_item(item_rect, state.select_item);
+
+        state.select_slot.pos = exp_decay(state.select_slot.pos, Input.mouse_pos, 10, dt);
+    }
+}
+
+void draw_inventory_() {
+    float32 dt = deltatime();
+    let state = *ui_inventory_state;
+
+    float32 px = 2.0 / app.window_height;
+
+    UI_Item* hover_elm = null;
+
+    for 0 .. list_length(state.ui_items) {
+        UI_Item* elm = *state.ui_items[it];
+
+        Color color = opacity(Black, 0.7);
+        float32 padding = 4*px;
+        if hover(elm.rect, Input.mouse_pos) {
+            hover_elm = elm;
+
+            color = Gray;
+            padding = 0;
+        }
+
+        draw_rect(pad(elm.rect, padding), color);
+
+        UI_Rect item_rect = {elm.pos, elm.rect.size};
+        draw_item(item_rect, @elm.item);
+
+        elm.pos = exp_decay(elm.pos, elm.rect.center, 10, dt);
+    }
+
+    if hover_elm {
+        Item* swap_slot = *state.select_item;
+
+        if key_down(Key.left_shift) {
+            Item* slot = get_first_empty_slot(state.backpack);
+            swap_slot = slot;
+        }
+
+
+        if mouse_pressed(MouseButton.Left) {
+
+            /*
+                pickup  placedown  swap
+            */
+
+            if !is_item(state.select_item) {
+                state.select_item_pos = Input.mouse_pos;
+            }
+
+            Item temp = @swap_slot;
+            @swap_slot = @hover_elm.item;
+            @hover_elm.item = temp;
+
+        }
+    }
+
+    if is_item(state.select_item) {
+        UI_Rect item_rect = {state.select_item_pos, {0.133,0.133}};
+        draw_item(item_rect, state.select_item);
+
+        state.select_item_pos = exp_decay(state.select_item_pos, Input.mouse_pos, 10, dt);
+    }
+}
+
+void draw_item(UI_Rect rect, Item item) {
+    // if !is_item(item) return;
+    if item.id == 0 return;
+
+    ItemInfo info = item_infos[item.id];
+    float32 width = rect.size.x;
+
+    float32 sprite_scale = width/2.0;
+    Transform2D tr = { pos = rect.center, scale = sprite_scale / info.sprite.tex.width };
+    vec4 color_factor = vec4_one;
+    vec4 color_additive = vec4_zero;
+    vec4 color_outline = vec4_zero;
+    draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
+
+    string text = to_string(item.count);
+
+    float32 glyph_height = width/2.0;
+    UI_Rect txt_rect = {};
+    txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
+    txt_rect = bottom_right(txt_rect, rect);
+
+    draw_text(center_text(txt_rect, glyph_height, text), glyph_height, text, White);
+}
+
 
 void draw_hotbar(Inventory* hotbar, uint32 index) {
     const hotbar_width = 1.2;
@@ -222,25 +507,7 @@ void draw_hotbar(Inventory* hotbar, uint32 index) {
         draw_rect(pad(rect, 4*px), color);
 
         Item item = hotbar.items[it];
-        if is_item(item) {
-            ItemInfo info = item_infos[item.id];
-
-            float32 sprite_scale = width/2.0;
-            Transform2D tr = { pos = rect.center, scale = sprite_scale / info.sprite.tex.width };
-            vec4 color_factor = vec4_one;
-            vec4 color_additive = vec4_zero;
-            vec4 color_outline = vec4_zero;
-            draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
-
-            string text = to_string(item.count);
-
-            float32 glyph_height = width/2.0;
-            UI_Rect txt_rect = {};
-            txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
-            txt_rect = bottom_right(txt_rect, rect);
-
-            draw_text(center_text(txt_rect, glyph_height, text), glyph_height, text, White);
-        }
+        draw_item(rect, item);
 
         if it == index {
             Color selection_highlight_color = opacity(Gray, 0.6);
@@ -249,18 +516,3 @@ void draw_hotbar(Inventory* hotbar, uint32 index) {
     }
 }
 
-void draw_backpack(Inventory* inv) {
-    float32 px = 2.0 / app.window_height;
-    Color color = opacity(Black, 0.7);
-
-    const hotbar_width = 1.2;
-    float32 width = hotbar_width / inv.cols;
-
-
-    UI_Rect inv_rect = {};
-    inv_rect.size = { inv.cols, inv.rows } * {width, width};
-    for y: 0 .. inv.rows  for x: 0 .. inv.cols {
-        UI_Rect slot_rect = grid(inv_rect, inv.rows, inv.cols, x, y);
-        draw_rect(pad(slot_rect, 4*px), color);
-    }
-}

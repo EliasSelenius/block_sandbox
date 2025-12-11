@@ -14,6 +14,12 @@ include "src/entity.pog";
 
     - items as entities
     - inventory
+        - on hover effect, that fade away persistently
+        - split stack
+        - place one item
+        - split stack by draging across multiple slots
+        - shift stack by draging across multiple slots
+
     - render tools in hand
     - view bobbing
     - collision response
@@ -346,7 +352,11 @@ void player_control() {
     }
 
     if key_pressed(key_open_inventory) {
-        player_backpack_open = !player_backpack_open;
+        if player_backpack_open {
+            player_backpack_open = false;
+        } else {
+            open_inventory(*player_hotbar, *player_backpack, null);
+        }
     }
 
 
@@ -363,9 +373,13 @@ void player_control() {
 
 
     if player_backpack_open {
-        draw_backpack(*player_backpack);
+
+        draw_inventory();
 
     } else {
+
+        draw_hotbar(*player_hotbar, hotbar_selected_slot);
+
         draw_text(vec2_zero, 0.05, "X", White);
 
         if is_thirdperson {
@@ -408,7 +422,6 @@ void player_control() {
     }
 
     if key('F') add_item(*player_hotbar, {1, 2} as Item);
-    draw_hotbar(*player_hotbar, hotbar_selected_slot);
 
     entity_update(*player, dt);
     if !is_thirdperson  world_cam.transform.position = player.tr.position;
