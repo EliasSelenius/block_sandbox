@@ -4,6 +4,11 @@ Entity player = {
     aabb = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}}
 };
 
+Inventory player_backpack = make_inventory(3, 9);
+Inventory player_hotbar = make_inventory(1, 9);
+uint32 hotbar_selected_slot = 0;
+bool player_backpack_open = false;
+
 struct Entity {
     Transform tr;
     Box aabb;
@@ -21,10 +26,10 @@ World world = {
     entity_pool = list_create(sizeof Entity)
 };
 
-Entity* spawn_item(vec3 pos, vel, uint32 item_id, count) {
+Entity* spawn_item(vec3 pos, vel, Item item) {
     Entity* en = list_append(*world.entity_pool);
     en.aabb = {vec3_zero, vec3_one*0.25};
-    en.item_stack = {item_id, count};
+    en.item_stack = item;
     en.tr = transform_default();
     en.tr.position = pos;
     en.vel = vel;
@@ -148,5 +153,114 @@ void world_draw(DeferredRenderer* R, World* w) {
         glDisable(GL_CULL_FACE);
         draw_elements(db_quad3D);
         glEnable(GL_CULL_FACE);
+    }
+}
+
+
+
+
+struct Inventory {
+    uint32 rows, cols;
+    Item* items;
+}
+
+Inventory make_inventory(uint32 rows, cols) {
+    Inventory inv = {};
+    inv.rows = rows;
+    inv.cols = cols;
+    inv.items = calloc(rows * cols, sizeof Item);
+    return inv;
+}
+
+Item* inv_item(Inventory* inv, uint32 x, y) return *inv.items[y*inv.cols + x];
+
+bool is_item(Item item) return item.id != 0 and item.count != 0;
+
+Item* get_first_empty_slot(Inventory* inv) {
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if !is_item(@item) return item;
+    }
+
+    return null;
+}
+
+bool add_item(Inventory* inv, Item item) {
+    for 0 .. inv.rows*inv.cols {
+        Item* slot = *inv.items[it];
+        if slot.count != 0 and slot.id == item.id {
+            slot.count += item.count;
+            return true;
+        }
+    }
+
+    let slot = get_first_empty_slot(inv);
+    if slot {
+        @slot = item;
+        return true;
+    }
+
+    return false;
+}
+
+void draw_hotbar(Inventory* hotbar, uint32 index) {
+    const hotbar_width = 1.2;
+    float32 width = hotbar_width / hotbar.cols;
+
+    float32 px = 2.0 / app.window_height;
+    float32 bottom_padding = width/6.0;
+
+    Color color = opacity(Black, 0.7);
+
+    UI_Rect hotbar_rect = {};
+    hotbar_rect.size = {hotbar_width, width};
+    hotbar_rect.center = {0, -1 + width/2.0 + bottom_padding};
+
+    for 0 .. hotbar.cols {
+        UI_Rect rect = div_x(hotbar_rect, hotbar.cols, it);
+
+        draw_rect(pad(rect, 4*px), color);
+
+        Item item = hotbar.items[it];
+        if is_item(item) {
+            ItemInfo info = item_infos[item.id];
+
+            float32 sprite_scale = width/2.0;
+            Transform2D tr = { pos = rect.center, scale = sprite_scale / info.sprite.tex.width };
+            vec4 color_factor = vec4_one;
+            vec4 color_additive = vec4_zero;
+            vec4 color_outline = vec4_zero;
+            draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
+
+            string text = to_string(item.count);
+
+            float32 glyph_height = width/2.0;
+            UI_Rect txt_rect = {};
+            txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
+            txt_rect = bottom_right(txt_rect, rect);
+
+            draw_text(center_text(txt_rect, glyph_height, text), glyph_height, text, White);
+        }
+
+        if it == index {
+            Color selection_highlight_color = opacity(Gray, 0.6);
+            draw_rect(pad_top(rect, width*(7/8.0)), selection_highlight_color);
+        }
+    }
+}
+
+void draw_backpack(Inventory* inv) {
+    float32 px = 2.0 / app.window_height;
+    Color color = opacity(Black, 0.7);
+
+    const hotbar_width = 1.2;
+    float32 width = hotbar_width / inv.cols;
+
+
+    UI_Rect inv_rect = {};
+    inv_rect.size = { inv.cols, inv.rows } * {width, width};
+    for y: 0 .. inv.rows  for x: 0 .. inv.cols {
+        UI_Rect slot_rect = grid(inv_rect, inv.rows, inv.cols, x, y);
+        draw_rect(pad(slot_rect, 4*px), color);
     }
 }

@@ -16,9 +16,106 @@ include "src/entity.pog";
     - inventory
     - render tools in hand
     - view bobbing
+    - collision response
+    - running
+    - crouch
+
+    - gauss blur in compute shader
 
 */
 
+
+enum Blend {
+    Overwrite;
+    Lerp_Src_Alpha;
+    Add;
+}
+
+void set_blend_mode(Blend blend) switch (blend) {
+    case .Overwrite: glDisable(GL_BLEND); break;
+    case .Lerp_Src_Alpha:
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        break;
+    case .Add:
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_ONE, GL_ONE);
+        break;
+}
+
+enum DepthTest {
+    Disabled;
+    Never; // GL_NEVER
+    Less; // GL_LESS
+    Equal; // GL_EQUAL
+    Less_Equal; // GL_LEQUAL
+    Greater; // GL_GREATER
+    Not_Equal; // GL_NOTEQUAL
+    Greater_Equal; // GL_GEQUAL
+    Always; // GL_ALWAYS
+}
+
+void set_depth_mode(DepthTest dt) switch (dt) {
+    case .Disabled:      glDisable(GL_DEPTH_TEST); break;
+    case .Never:         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_NEVER); break;
+    case .Less:          glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); break;
+    case .Equal:         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_EQUAL); break;
+    case .Less_Equal:    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); break;
+    case .Greater:       glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GREATER); break;
+    case .Not_Equal:     glEnable(GL_DEPTH_TEST); glDepthFunc(GL_NOTEQUAL); break;
+    case .Greater_Equal: glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL); break;
+    case .Always:        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS); break;
+}
+
+// enum Cull { None; Front; Back; All; }
+// void set_cull_mode(Cull cull) switch (cull) {
+//     case .None:  glDisable(GL_CULL_FACE); break;
+//     case .Front: glEnable(GL_CULL_FACE); glCullFace(GL_FRONT); break;
+//     case .Back:  glEnable(GL_CULL_FACE); glCullFace(GL_BACK); break;
+//     case .All:   glEnable(GL_CULL_FACE); glCullFace(GL_FRONT_AND_BACK); break;
+// }
+
+enum Poly { Cull; Point; Line; Fill; }
+void set_face_render_mode(Poly front, back) {
+    void polymode(GLenum face, Poly mode) switch (mode) {
+        case .Cull:  glEnable(GL_CULL_FACE); glCullFace(face); break;
+        case .Point: glPolygonMode(face, GL_POINT); break;
+        case .Line:  glPolygonMode(face, GL_LINE); break;
+        case .Fill:  glPolygonMode(face, GL_FILL); break;
+    }
+
+    glDisable(GL_CULL_FACE);
+    if front == back {
+        polymode(GL_FRONT_AND_BACK, front);
+    } else {
+        polymode(GL_FRONT, front);
+        polymode(GL_BACK, back);
+    }
+}
+
+struct RenderPass {
+    Poly front;
+    Poly back;
+    Blend blend;
+    DepthTest depth_test;
+    bool depth_write;
+}
+
+void start_render_pass(RenderPass pass) {
+    set_face_render_mode(pass.front, pass.back);
+    set_blend_mode(pass.blend);
+    set_depth_mode(pass.depth_test);
+    glDepthMask(pass.depth_write);
+}
+
+RenderPass pass_world = {
+    front = Poly.Fill, back = Poly.Cull,
+    blend = Blend.Overwrite,
+    depth_test = DepthTest.Less_Equal,
+    depth_write = true
+};
 
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
@@ -31,6 +128,12 @@ DrawBuffers db_quad3D;
 
 bool is_freecam = true;
 bool is_thirdperson = false;
+
+Key key_jump                = .space;
+Key key_open_inventory      = .E;
+Key key_drop_item           = .Q;
+Key key_thirdperson_toggle  = .backspace;
+Key key_freecam_toggle      = .enter;
 
 struct BlockInfo {
     char* name;
@@ -55,10 +158,12 @@ struct ItemInfo {
     Sprite sprite;
 }
 
-const ItemInfos_Count = 2;
+const ItemInfos_Count = 4;
 ItemInfo[ItemInfos_Count] item_infos = {
     {},
-    {"Stone", "stone.bmp"}
+    {"Stone", "stone.bmp"},
+    {"Soil", "soil.bmp"},
+    {"Grass", "grass.bmp"}
 };
 
 void main() {
@@ -69,7 +174,7 @@ void main() {
     let renderer = deferred_renderer_init();
     let R = *renderer;
     R.sun_dir = {1, 0, 0};
-    R.sun_radiance = {1, 1, 1};
+    R.sun_radiance = {5, 5, 5};
     R.sun_ambient_factor = 0.05;
 
     static_ui = create_layer();
@@ -137,10 +242,8 @@ void main() {
         ensure_chunks();
 
         float32 dt = deltatime();
-        draw_text(vec2_zero, 0.05, "X", White);
 
-
-        if key_pressed(GLFW_KEY_ENTER) {
+        if key_pressed(key_freecam_toggle) {
             player.tr.position = world_cam.transform.position;
             is_freecam = !is_freecam;
         }
@@ -151,124 +254,171 @@ void main() {
             @sh = load_shader(sh.name.chars);
         }
 
-        vec2 cursor_pos = Input.mouse_pos;
 
         if is_freecam {
             enable_cursor();
             camera_fly_control(*world_cam, 0.05);
         } else {
-
-            vec3 f = forward(world_cam.transform);
-            f = noz(make_vec(f.x, 0, f.z));
-
-            vec3 s = left(world_cam.transform);
-            s = noz(make_vec(s.x, 0, s.z));
-
-            vec3 updown = {};
-            if false  updown = vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
-            let i = Input.wasd;
-            vec3 movement = f*i.y - s*i.x + updown;
-            float32 speed = 2.4;
-            player.tr.position = player.tr.position + noz(movement)*speed*dt;
-
-            if key_pressed(GLFW_KEY_SPACE) {
-                player.vel.y += 5;
-            }
-
-            player.vel.y -= 9.8*dt;
-            player.tr.position = player.tr.position + player.vel*dt;
-
-            collide_aabb(*player);
-
-
-            if key_pressed(GLFW_KEY_BACKSPACE) {
-                is_thirdperson = !is_thirdperson;
-            }
-
-            if key_pressed('Q') {
-                vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
-                spawn_item(player.tr.position, look_dir*4, 1, 1);
-            }
-
-            if is_thirdperson {
-                enable_cursor();
-                camera_orbit_control(*world_cam, player.tr.position);
-            } else {
-                disable_cursor();
-                cursor_pos = vec2_zero;
-
-                rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
-                rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
-                world_cam.transform.position = player.tr.position;
-            }
-
-            gizmo_box(player.tr.position + player.aabb.center, player.aabb.size, Green);
-        }
-
-        update_matrices(*world_cam);
-        let o = world_cam.transform.position;
-        let d = camera_ray(world_cam, cursor_pos);
-        let ts = start_traversal(o, d);
-        ivec3 prev_coord = {};
-
-        while true {
-            traverse(*ts);
-            float32 dist = travel_distance(ts);
-            if dist > 5 break;
-
-            uint16 id = get_block(ts.coord);
-            if id {
-                gizmo_box(make_vec(ts.coord), vec3_one, Black);
-                if mouse_pressed(Left_Mouse) {
-                    set_block(ts.coord, 0);
-                } else if mouse_released(Right_Mouse) {
-                    set_block(prev_coord, 1);
-                }
-                break;
-            }
-
-            prev_coord = ts.coord;
+            player_control();
         }
 
         world_update(*world, dt);
 
-        draw_inventory();
-
-        dispatch_sprites({scale=1} as Transform2D);
+        glDepthMask(true);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         draw_world(R, world_cam);
-
         gizmo_dispatch();
         dispatch_layer(*static_ui, {scale=1} as Transform2D);
+        dispatch_sprites({scale=1} as Transform2D);
     }
 }
 
-void draw_inventory() {
-    const hotbar_count = 9;
-    const hotbar_width = 1.0;
-    float32 width = hotbar_width / hotbar_count;
+struct BlockRaycastResult {
+    ivec3 coord, prev_coord;
+    uint16 block_id;
+    float32 dist;
+}
 
-    float32 px = 2.0 / app.window_height;
-    float32 bottom_padding = width/4.0;
+BlockRaycastResult grid_raycast(float32 max_dist) {
 
-    Color color = opacity(Black, 0.7);
+    vec2 cursor_pos = Input.mouse_pos;
+    if !is_thirdperson and !is_freecam  cursor_pos = vec2_zero;
 
-    for 0 .. hotbar_count {
-        UI_Rect rect = {};
-        rect.size = {width, width};
-        rect.center = {-(hotbar_width/2.0) + width*it + width/2.0, -1 + width/2.0 + bottom_padding};
+    update_matrices(*world_cam);
+    let o = world_cam.transform.position;
+    let d = camera_ray(world_cam, cursor_pos);
+    let ts = start_traversal(o, d);
+    ivec3 prev_coord = {};
 
-        draw_rect(pad(rect, 5*px), color);
+    while true {
+        traverse(*ts);
+        float32 dist = travel_distance(ts);
+        if dist > max_dist break;
+
+        uint16 id = get_block(ts.coord);
+        if id {
+            BlockRaycastResult result = {};
+            result.block_id = id;
+            result.dist = dist;
+            result.coord = ts.coord;
+            result.prev_coord = prev_coord;
+            return result;
+        }
+
+        prev_coord = ts.coord;
+    }
+
+    return {};
+}
+
+// type Abled = uint8;
+// const Enabled  = 1 as Abled;
+// const Disabled = 0 as Abled;
+
+// cusror(Abled b);
+// cursor(Disabled);
+
+void player_move_input(Entity* en, Camera cam, float32 dt) {
+
+    vec3 f = forward(cam.transform);
+    f = noz(make_vec(f.x, 0, f.z));
+
+    vec3 s = left(cam.transform);
+    s = noz(make_vec(s.x, 0, s.z));
+
+    vec3 updown = {};
+    if false  updown = vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
+    let i = Input.wasd;
+    vec3 movement = f*i.y - s*i.x + updown;
+    float32 speed = 2.4;
+    en.tr.position = en.tr.position + noz(movement)*speed*dt;
+
+    if key_pressed(key_jump) {
+        en.vel.y += 5;
     }
 }
+
+void player_control() {
+    float32 dt = deltatime();
+
+    if key_pressed(key_thirdperson_toggle) {
+        is_thirdperson = !is_thirdperson;
+    }
+
+    if key_pressed(key_open_inventory) {
+        player_backpack_open = !player_backpack_open;
+    }
+
+
+
+    /*
+        thirdperson     open_inv    cursor
+        false           false       disabled
+        false           true        enabled
+        true            false       enabled
+        true            true        enabled
+    */
+    if is_thirdperson or player_backpack_open
+        enable_cursor(); else disable_cursor();
+
+
+    if player_backpack_open {
+        draw_backpack(*player_backpack);
+
+    } else {
+        draw_text(vec2_zero, 0.05, "X", White);
+
+        if is_thirdperson {
+            camera_orbit_control(*world_cam, player.tr.position);
+        } else {
+            rotate(*world_cam.transform, left(world_cam.transform), Input.mouse_delta.y * 2.0);
+            rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
+        }
+
+        player_move_input(*player, world_cam, dt);
+
+        hotbar_selected_slot = (9 + hotbar_selected_slot as int32 - Input.mouse_scroll as int32) as uint32 % 9;
+
+        Item* item_hand = *player_hotbar.items[hotbar_selected_slot];
+        if is_item(@item_hand) {
+            if key_pressed(key_drop_item) {
+                vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
+                Item item = {item_hand.id, 1};
+                spawn_item(player.tr.position, look_dir*4, item);
+
+                item_hand.count--;
+            }
+        }
+
+        let target = grid_raycast(5);
+        if target.block_id {
+            gizmo_box(make_vec(target.coord), vec3_one, Black);
+            if mouse_pressed(Left_Mouse) {
+                set_block(target.coord, 0);
+
+                Item item = {target.block_id, 1};
+                add_item(*player_hotbar, item);
+            } else if mouse_released(Right_Mouse) {
+                if is_item(@item_hand) {
+                    set_block(target.prev_coord, item_hand.id);
+                    item_hand.count--;
+                }
+            }
+        }
+    }
+
+    if key('F') add_item(*player_hotbar, {1, 2} as Item);
+    draw_hotbar(*player_hotbar, hotbar_selected_slot);
+
+    entity_update(*player, dt);
+    if !is_thirdperson  world_cam.transform.position = player.tr.position;
+}
+
 
 void draw_world(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
     R.sun_dir = { cos(time), 0.7, sin(time) };
     // R.sun_dir = noz(forward(cam.transform));
-
-    float32 sr = 10;
-    R.sun_radiance = { sr, sr, sr };
-    R.sun_ambient_factor = 0.05;
 
     begin_geometry_pass(R, cam);
 
@@ -315,6 +465,7 @@ void draw_world(DeferredRenderer* R, Camera cam) {
             chunk.must_remesh = false;
         }
 
+        start_render_pass(pass_world);
         draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
     }
 
