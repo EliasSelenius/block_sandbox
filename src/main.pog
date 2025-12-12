@@ -13,12 +13,14 @@ include "src/entity.pog";
     - z order traversal pattern: https://www.youtube.com/watch?v=ztkh1r1ioZo @13:40
 
     - items as entities
+        - pickup
+        - rendering
+
     - inventory
-        - on hover effect, that fade away persistently
         - split stack
         - place one item
+        - pick one item
         - split stack by draging across multiple slots
-        - shift stack by draging across multiple slots
 
     - render tools in hand
     - view bobbing
@@ -162,15 +164,29 @@ struct ItemInfo {
     char* name;
     char* image_file_name;
     Sprite sprite;
+    uint32 sprite_index;
 }
 
-const ItemInfos_Count = 4;
-ItemInfo[ItemInfos_Count] item_infos = {
+ItemInfo[] item_infos = {
     {},
     {"Stone", "stone.bmp"},
     {"Soil", "soil.bmp"},
-    {"Grass", "grass.bmp"}
+    {"Grass", "grass.bmp"},
+    {"Flint Hatchet", sprite_index = 0}
 };
+
+
+Sprite sub_sprite(Sprite sp, uint32 sprite_index, sprite_pixel_size, num_cells) {
+    uint32 w = sprite_pixel_size * num_cells;
+    sp.uv_scale = make_vec2(sprite_pixel_size as float32 / w);
+
+    uint32 x = sprite_index % num_cells;
+    uint32 y = sprite_index / num_cells;
+    sp.uv_offset = {x, y} * sp.uv_scale;
+
+    return sp;
+}
+
 
 void main() {
     grax_init();
@@ -226,13 +242,17 @@ void main() {
     set_filter(texture_spritesheet, TextureFilter.nearest);
     free(spritesheet.pixels);
 
-    for 0 .. ItemInfos_Count {
+    Sprite items_spritesheet = make_sprite(load_texture2D("assets/items.bmp"));
+
+    for 0 .. item_infos.length {
         let info = *item_infos[it];
         if info.image_file_name {
             let image = load_bitmap(concat("assets/", info.image_file_name));
             info.sprite = make_sprite(create_texture2D(image));
             set_filter(info.sprite.tex, TextureFilter.nearest);
             free(image.pixels);
+        } else {
+            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, 16, 4);
         }
     }
 
@@ -372,14 +392,13 @@ void player_control() {
         enable_cursor(); else disable_cursor();
 
 
+    if !player_backpack_open  hotbar_selected_slot = (9 + hotbar_selected_slot as int32 - Input.mouse_scroll as int32) as uint32 % 9;
+    Item* item_hand = player_held_item();
+
     if player_backpack_open {
-
         draw_inventory();
-
     } else {
-
         draw_hotbar(*player_hotbar, hotbar_selected_slot);
-
         draw_text(vec2_zero, 0.05, "X", White);
 
         if is_thirdperson {
@@ -391,37 +410,37 @@ void player_control() {
 
         player_move_input(*player, world_cam, dt);
 
-        hotbar_selected_slot = (9 + hotbar_selected_slot as int32 - Input.mouse_scroll as int32) as uint32 % 9;
-
-        Item* item_hand = *player_hotbar.items[hotbar_selected_slot];
         if is_item(@item_hand) {
             if key_pressed(key_drop_item) {
                 vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
                 Item item = {item_hand.id, 1};
                 spawn_item(player.tr.position, look_dir*4, item);
 
-                item_hand.count--;
+                item_count(item_hand, -1);
             }
         }
 
         let target = grid_raycast(5);
         if target.block_id {
             gizmo_box(make_vec(target.coord), vec3_one, Black);
+
             if mouse_pressed(Left_Mouse) {
                 set_block(target.coord, 0);
-
                 Item item = {target.block_id, 1};
                 add_item(*player_hotbar, item);
+
             } else if mouse_released(Right_Mouse) {
                 if is_item(@item_hand) {
                     set_block(target.prev_coord, item_hand.id);
-                    item_hand.count--;
+                    item_count(item_hand, -1);
                 }
             }
         }
     }
 
-    if key('F') add_item(*player_hotbar, {1, 2} as Item);
+    if key_pressed('F') add_item(*player_hotbar, {4, 1} as Item);
+
+    if !is_thirdperson   player.tr.rotation = slerp(0.6, player.tr.rotation, world_cam.transform.rotation);
 
     entity_update(*player, dt);
     if !is_thirdperson  world_cam.transform.position = player.tr.position;
