@@ -24,6 +24,8 @@ struct Entity {
     vec3 vel;
 
     Item item_stack;
+
+    float32 cooldown;
 }
 
 struct World {
@@ -34,13 +36,14 @@ World world = {
     entity_pool = list_create(sizeof Entity)
 };
 
-Entity* spawn_item(vec3 pos, vel, Item item) {
+Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     Entity* en = list_append(*world.entity_pool);
     en.aabb = {vec3_zero, vec3_one*0.5};
     en.item_stack = item;
     en.tr = transform_default();
     en.tr.position = pos;
     en.vel = vel;
+    en.cooldown = cooldown;
     return en;
 }
 
@@ -126,14 +129,20 @@ void entity_update(Entity* en, float32 dt) {
     en.vel.y -= 9.8*dt;
     en.tr.position = en.tr.position + en.vel*dt;
 
+    if en.cooldown > 0.0   en.cooldown -= dt;
+
     collide_aabb(en);
 
     if en.item_stack.id != 0 {
-        if sqdist(player.tr.position, en.tr.position) < sq(3) {
+        rotate(*en.tr, vec3_unit_y, Pi*dt);
+
+        if sqdist(player.tr.position, en.tr.position) < sq(1.5) and en.cooldown <= 0.0 {
             look_at(*en.tr, player.tr.position);
-        } else {
+
+            if add_item(*player_hotbar, en.item_stack) or add_item(*player_backpack, en.item_stack) {
+                list_remove(world.entity_pool, en);
+            }
         }
-            rotate(*en.tr, vec3_unit_y, Pi*dt);
     }
 
 
@@ -371,7 +380,7 @@ void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
         update_slot(slot, slot.rect.center, dt);
 
         // slot.pos = exp_decay(slot.pos, slot.rect.center, 10, dt);
-        slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 10, dt));
+        slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 5, dt));
     }
 }
 

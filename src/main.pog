@@ -12,21 +12,24 @@ include "src/entity.pog";
 
     - z order traversal pattern: https://www.youtube.com/watch?v=ztkh1r1ioZo @13:40
 
-    - items as entities
-        - pickup
-        - rendering
-
     - inventory
         - split stack
         - place one item
         - pick one item
         - split stack by draging across multiple slots
 
-    - render tools in hand
     - view bobbing
-    - collision response
+    - collision response (with regards to items, which are the only type of entity other than the player as of this writing)
     - running
     - crouch
+
+    - block: wood log
+    - hand held item swing animation
+
+    - block breaking durability
+
+    - item max stack count
+    - item durability
 
     - gauss blur in compute shader
 
@@ -143,21 +146,31 @@ Key key_drop_item           = .Q;
 Key key_thirdperson_toggle  = .backspace;
 Key key_freecam_toggle      = .enter;
 
+MouseButton mouse_primary_action = .Left;
+MouseButton mouse_secondary_action = .Right;
+
+
 struct BlockInfo {
     char* name;
 
     char* image_file_name;
     Image image;
     Texture2D texture;
+    uint32 drop;
+    ToolType tool;
 }
 
 const Block_Type_Count = 4;
 BlockInfo[Block_Type_Count] block_types = {
     {"Air"},
-    {"Stone", "stone.bmp"},
-    {"Soil", "soil.bmp"},
-    {"Grass", "grass.bmp"}
+    {"Stone",   "stone.bmp",    tool = .Pickaxe,  drop = 1 },
+    {"Soil",    "soil.bmp",     tool = .Shovel,   drop = 2 },
+    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = 3 }
 };
+
+enum ToolType {
+    None; Axe; Pickaxe; Shovel;
+}
 
 struct Item { uint32 id, count; }
 struct ItemInfo {
@@ -165,14 +178,19 @@ struct ItemInfo {
     char* image_file_name;
     Sprite sprite;
     uint32 sprite_index;
+    ToolType tool;
+    uint16 block_id;
+
 }
 
 ItemInfo[] item_infos = {
     {},
-    {"Stone", "stone.bmp"},
-    {"Soil", "soil.bmp"},
-    {"Grass", "grass.bmp"},
-    {"Flint Hatchet", sprite_index = 0}
+    {"Stone",   "stone.bmp",    block_id = 1 },
+    {"Soil",    "soil.bmp",     block_id = 2 },
+    {"Grass",   "grass.bmp",    block_id = 3 },
+    {"Flint Hatchet", sprite_index = 0, tool = .Axe},
+    {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
+    {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe}
 };
 
 
@@ -414,38 +432,58 @@ void player_control() {
             if key_pressed(key_drop_item) {
                 vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
                 Item item = {item_hand.id, 1};
-                spawn_item(player.tr.position, look_dir*4, item);
+                spawn_item(player.tr.position, look_dir*4, item, 3);
 
                 item_count(item_hand, -1);
             }
         }
 
         let target = grid_raycast(5);
-        if target.block_id {
-            gizmo_box(make_vec(target.coord), vec3_one, Black);
-
-            if mouse_pressed(Left_Mouse) {
-                set_block(target.coord, 0);
-                Item item = {target.block_id, 1};
-                add_item(*player_hotbar, item);
-
-            } else if mouse_released(Right_Mouse) {
-                if is_item(@item_hand) {
-                    set_block(target.prev_coord, item_hand.id);
-                    item_count(item_hand, -1);
-                }
-            }
-        }
+        item_action(target, item_hand);
     }
 
-    if key_pressed('F') add_item(*player_hotbar, {4, 1} as Item);
+    if key_pressed('F') {
+        add_item(*player_hotbar, {4, 1} as Item);
+        add_item(*player_hotbar, {5, 1} as Item);
+        add_item(*player_hotbar, {6, 1} as Item);
+    }
 
-    if !is_thirdperson   player.tr.rotation = slerp(0.6, player.tr.rotation, world_cam.transform.rotation);
+    if !is_thirdperson   player.tr.rotation = slerp(0.4, player.tr.rotation, world_cam.transform.rotation);
 
     entity_update(*player, dt);
     if !is_thirdperson  world_cam.transform.position = player.tr.position;
 }
 
+void item_action(BlockRaycastResult target, Item* item) {
+
+    ItemInfo item_info = item_infos[item.id];
+    if target.block_id {
+        BlockInfo block_info = block_types[target.block_id];
+
+        if item_info.tool {
+            if item_info.tool == block_info.tool {
+                gizmo_box(make_vec(target.coord), vec3_one, Black);
+
+                if mouse_pressed(mouse_primary_action) {
+                    set_block(target.coord, 0);
+
+                    Item item = {block_info.drop, 1};
+                    spawn_item(make_vec(target.coord), random_unit_vec3() * 3, item, 0.3);
+
+                    // add_item(*player_hotbar, item);
+                }
+            }
+        } else if item_info.block_id {
+            gizmo_box(make_vec(target.prev_coord), vec3_one, Black);
+
+            if mouse_pressed(mouse_secondary_action) {
+                set_block(target.prev_coord, item_info.block_id);
+                item_count(item, -1);
+            }
+        }
+    }
+
+}
 
 void draw_world(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
