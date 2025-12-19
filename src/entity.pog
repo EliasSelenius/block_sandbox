@@ -1,8 +1,10 @@
 
 const player_height = 1.83;
+Box box_player = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}};
+
 Entity player = {
     tr = {scale=vec3_one, rotation=quat_identity},
-    aabb = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}}
+    aabb = box_player
 };
 
 Inventory player_backpack = make_inventory(3, 9);
@@ -10,14 +12,20 @@ Inventory player_hotbar = make_inventory(1, 9);
 uint32 hotbar_selected_slot = 0;
 bool player_backpack_open = false;
 
+float32 player_swing_anim_time = 0;
+
+float32 player_tool_charge = 0;
+
 Item* player_held_item() return *player_hotbar.items[hotbar_selected_slot];
 
-enum EntityKind {
+enum Entitykind {
     Player;
     Item;
 }
 
 struct Entity {
+    Entitykind kind;
+
     Transform tr;
     Box aabb;
 
@@ -26,6 +34,9 @@ struct Entity {
     Item item_stack;
 
     float32 cooldown;
+    uint32 hp;
+
+    bool is_grounded;
 }
 
 struct World {
@@ -38,12 +49,26 @@ World world = {
 
 Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     Entity* en = list_append(*world.entity_pool);
+    @en = {};
+    en.kind = .Item;
     en.aabb = {vec3_zero, vec3_one*0.5};
     en.item_stack = item;
     en.tr = transform_default();
     en.tr.position = pos;
     en.vel = vel;
     en.cooldown = cooldown;
+    return en;
+}
+
+Entity* spawn_entity(vec3 pos, vel) {
+    Entity* en = list_append(*world.entity_pool);
+    @en = {};
+    en.kind = .Player;
+    en.aabb = box_player
+    en.tr = transform_default();
+    en.tr.position = pos;
+    en.vel = vel;
+    en.hp = 100;
     return en;
 }
 
@@ -90,6 +115,9 @@ void collide_aabb(Entity* en) {
 
     vec3 move = {};
 
+    BlockInter deepest_inter = {};
+
+    en.is_grounded = false;
     for z: mi.z .. mx.z+1 {
         for y: mi.y .. mx.y+1 {
             for x: mi.x .. mx.x+1 {
@@ -111,15 +139,27 @@ void collide_aabb(Entity* en) {
                 if abs(disp.y) > abs(move.y) move.y = disp.y;
                 if abs(disp.z) > abs(move.z) move.z = disp.z;
 
-                float32 l = -dot(en.vel, inter.normal);
-                if l > 0.0 {
-                    en.vel = en.vel + inter.normal * l;
-                }
+                if deepest_inter.depth < inter.depth  deepest_inter = inter;
 
+                if inter.normal.y > 0  en.is_grounded = true;
             }
         }
     }
 
+    float32 mass = 1.0;
+    float32 e = 0;
+    if en.kind == .Item {
+        e = 0.8;
+    }
+
+    float32 cof_k = 0.5;
+    float32 cof_s = 1.2 * cof_k;
+    if sqlength(Input.wasd) > 0 {
+        cof_k = 0.1;
+        cof_s = 0;
+    }
+
+    en.vel = calc_new_vel(en.vel, deepest_inter.normal, mass, e, cof_s, cof_k);
     en.tr.position = en.tr.position + move;
 }
 
@@ -171,6 +211,26 @@ void draw_quad(DeferredRenderer* R, Sprite sprite, Material_PBR material, mat4 m
     glEnable(GL_CULL_FACE);
 }
 
+
+/* TODO: thinking about how I want to add physics to items held in hand
+struct Physics {
+    vec3 pos, ang, vel, ang_vel;
+}
+
+void integrate(Physics* p, float32 dt) {
+    p.pos = p.pos + vel*dt;
+    p.ang = p.ang + ang_vel*dt;
+}
+
+mat4 get_transform(Physics p) {
+    float32 angle = length(p.ang);
+    vec3 axis = noz(p.ang);
+
+    quat rot = axis_angle(axis, angle);
+    return make_mat4(p.pos, vec3_one, rot);
+}
+*/
+
 void world_draw(DeferredRenderer* R, World* w) {
 
     Item* item_hand = player_held_item();
@@ -178,9 +238,14 @@ void world_draw(DeferredRenderer* R, World* w) {
         ItemInfo info = item_infos[item_hand.id];
 
         vec3 offset = make_vec(-(player.aabb.size.x * 1.3 / 2.0), -0.3, 0.5);
+
         float32 d90 = Pi/4.0;
         float32 d45 = d90/2.0;
-        let model = make_mat4(offset, vec3_one, axis_angle(vec3_unit_y, -d90*2) * axis_angle(vec3_unit_x, -(d90+d45))) * to_matrix(player.tr);
+        quat rotation = axis_angle(vec3_unit_y, -d90*2) * axis_angle(vec3_unit_x, -(d90+d45));
+
+        vec3 bottom_left = {-0.5, 0.5, 0};
+        quat tool_charge_rot = axis_angle(vec3_unit_z, d90 * player_tool_charge);
+        let model = rotate(mat4_id, tool_charge_rot, bottom_left) * make_mat4(offset, vec3_one, rotation) * to_matrix(player.tr);
         Material_PBR mat = {{1,1,1}, 0.1, 0.1};
         draw_quad(R, info.sprite, mat, model);
     }
@@ -201,7 +266,6 @@ void world_draw(DeferredRenderer* R, World* w) {
         }
     }
 }
-
 
 
 
@@ -282,6 +346,11 @@ struct UI_Slots {
     uint32 elements_count;
 }
 
+struct UI_Crafting {
+    UI_Rect rect;
+    UI_Slot[..] slots;
+}
+
 struct UI_Inventory_State {
     UI_Slots slots_hotbar;
     UI_Slots slots_backpack;
@@ -291,6 +360,8 @@ struct UI_Inventory_State {
     UI_Slot* hover_slot;
     UI_Slot select_slot;
     Item select_item;
+
+    UI_Crafting crafting;
 }
 
 UI_Inventory_State ui_inventory_state;
@@ -306,13 +377,23 @@ void open_inventory(Inventory* hotbar, backpack, chest) {
     float32 px = 2.0 / app.window_height;
     float32 bottom_padding = slot_size/6.0;
 
+    float32 padding = slot_size/4.0;
+
     UI_Rect hotbar_rect = {};
     hotbar_rect.size = { hotbar.cols, hotbar.rows } * slot_size;
     hotbar_rect.center = {0, -1 + slot_size/2.0 + bottom_padding};
 
     UI_Rect backpack_rect = {};
     backpack_rect.size = { backpack.cols, backpack.rows } * slot_size;
+    backpack_rect.center = hotbar_rect.center + {0, (backpack_rect.size.y + hotbar_rect.size.y)/2.0 + padding};
 
+    UI_Rect crafting_rect = {};
+    crafting_rect.size = { backpack.cols, 4 } * slot_size;
+    crafting_rect.center = {0, backpack_rect.center.y + (backpack_rect.size.y + crafting_rect.size.y)/2.0 + padding};
+    state.crafting.rect = crafting_rect;
+
+    if state.crafting.slots == null  state.crafting.slots = list_create(sizeof UI_Slot);
+    list_clear(state.crafting.slots);
 
     prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
     prepare_elements(backpack_rect, *state.slots_backpack, backpack);
@@ -384,6 +465,29 @@ void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
     }
 }
 
+void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float32 dt) {
+    if hover(slot.rect, Input.mouse_pos) {
+        state.hover_slot = slot;
+        state.slots_to_swap_to = next;
+    }
+
+    if draw_bkg {
+        float32 px = 2.0 / app.window_height;
+        float32 padding = 4*px;
+        Color color = lerp(slot.hover_t, opacity(Black, 0.6), opacity(Gray, 0.8));
+        draw_rect(pad(slot.rect, padding), color);
+    }
+
+
+    float32 item_scale = lerp(slot.hover_t, 1, 1.2);
+    UI_Rect item_rect = {slot.pos, slot.rect.size * item_scale};
+    draw_item(item_rect, @slot.item);
+
+    update_slot(slot, slot.rect.center, dt);
+
+    slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 5, dt));
+}
+
 void draw_inventory() {
     float32 dt = deltatime();
     let state = *ui_inventory_state;
@@ -391,6 +495,19 @@ void draw_inventory() {
     state.hover_slot = null;
     draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
     draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
+
+    { // crafting
+        draw_rect(state.crafting.rect, opacity(Black, 0.6));
+        for 0 .. list_length(state.crafting.slots) {
+            UI_Slot* slot = *state.crafting.slots[it];
+            draw_slot(state, slot, true, *state.slots_backpack, dt);
+        }
+
+        for 0 .. recipes.length {
+            Recipe rec = recipes[it];
+        }
+    }
+
 
     if state.hover_slot {
         UI_Slot* hover = state.hover_slot;
@@ -416,6 +533,11 @@ void draw_inventory() {
 
                 // 
             }
+        }
+    } else if hover(state.crafting.rect, Input.mouse_pos) {
+        if mouse_pressed(MouseButton.Left) and state.select_item.id {
+            UI_Slot* slot = list_append(*state.crafting.slots);
+            
         }
     }
 

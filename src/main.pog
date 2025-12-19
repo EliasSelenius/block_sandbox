@@ -19,12 +19,12 @@ include "src/entity.pog";
         - split stack by draging across multiple slots
 
     - view bobbing
-    - collision response (with regards to items, which are the only type of entity other than the player as of this writing)
     - running
     - crouch
 
     - block: wood log
     - hand held item swing animation
+    - hand held item should react to player momentum
 
     - block breaking durability
 
@@ -32,6 +32,8 @@ include "src/entity.pog";
     - item durability
 
     - gauss blur in compute shader
+
+    - crafting:
 
 */
 
@@ -160,12 +162,13 @@ struct BlockInfo {
     ToolType tool;
 }
 
-const Block_Type_Count = 4;
+const Block_Type_Count = 5;
 BlockInfo[Block_Type_Count] block_types = {
     {"Air"},
     {"Stone",   "stone.bmp",    tool = .Pickaxe,  drop = 1 },
     {"Soil",    "soil.bmp",     tool = .Shovel,   drop = 2 },
-    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = 3 }
+    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = 3 },
+    {"Gravel",  "gravel.bmp",   tool = .Shovel,   drop = 7 }
 };
 
 enum ToolType {
@@ -190,9 +193,19 @@ ItemInfo[] item_infos = {
     {"Grass",   "grass.bmp",    block_id = 3 },
     {"Flint Hatchet", sprite_index = 0, tool = .Axe},
     {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
-    {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe}
+    {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe},
+    {"Rock",          sprite_index = 3 },
+    {"Flint Rock",    sprite_index = 4 }
 };
 
+struct Recipe {
+    Item product;
+    Item[] ingredient;
+}
+
+Recipe[] recipes = {
+    { product={4, 1}, ingredient={{8, 1}} }
+};
 
 Sprite sub_sprite(Sprite sp, uint32 sprite_index, sprite_pixel_size, num_cells) {
     uint32 w = sprite_pixel_size * num_cells;
@@ -285,8 +298,6 @@ void main() {
     while grax_loop() {
         ensure_chunks();
 
-        float32 dt = deltatime();
-
         if key_pressed(key_freecam_toggle) {
             player.tr.position = world_cam.transform.position;
             is_freecam = !is_freecam;
@@ -299,11 +310,13 @@ void main() {
         }
 
 
+        float32 dt = 1.0/60.0; // deltatime();
+
         if is_freecam {
             enable_cursor();
             camera_fly_control(*world_cam, 0.05);
         } else {
-            player_control();
+            player_control(dt);
         }
 
         world_update(*world, dt);
@@ -364,26 +377,30 @@ BlockRaycastResult grid_raycast(float32 max_dist) {
 
 void player_move_input(Entity* en, Camera cam, float32 dt) {
 
-    vec3 f = forward(cam.transform);
-    f = noz(make_vec(f.x, 0, f.z));
+    vec3 f = noz(forward(cam.transform) * make_vec(1,0,1));
+    vec3 s = noz(   left(cam.transform) * make_vec(1,0,1));
 
-    vec3 s = left(cam.transform);
-    s = noz(make_vec(s.x, 0, s.z));
-
-    vec3 updown = {};
-    if false  updown = vec3_unit_y*input_axis(GLFW_KEY_LEFT_SHIFT, GLFW_KEY_SPACE);
     let i = Input.wasd;
-    vec3 movement = f*i.y - s*i.x + updown;
-    float32 speed = 2.4;
-    en.tr.position = en.tr.position + noz(movement)*speed*dt;
+    vec3 movement = noz(f*i.y - s*i.x);
 
-    if key_pressed(key_jump) {
-        en.vel.y += 5;
+    static float32 max_speed = 3; // 4.317;
+    static float32 acceleration = 30;
+
+    // time it takes to go from 0 to max_speed given acceleration
+    // max_speed / acceleration = seconds
+
+    vec3 target_vel = movement*max_speed;
+    target_vel.y = en.vel.y;
+    en.vel = move(en.vel, target_vel, acceleration*dt);
+
+    if en.is_grounded {
+        if key_pressed(key_jump)  en.vel.y += 5;
     }
+
+    draw_text(make_vec(0.1, 0), 0.05, to_string(length(en.vel)), White);
 }
 
-void player_control() {
-    float32 dt = deltatime();
+void player_control(float32 dt) {
 
     if key_pressed(key_thirdperson_toggle) {
         is_thirdperson = !is_thirdperson;
@@ -439,13 +456,15 @@ void player_control() {
         }
 
         let target = grid_raycast(5);
-        item_action(target, item_hand);
+        item_action(target, item_hand, dt);
     }
 
     if key_pressed('F') {
         add_item(*player_hotbar, {4, 1} as Item);
         add_item(*player_hotbar, {5, 1} as Item);
         add_item(*player_hotbar, {6, 1} as Item);
+        add_item(*player_hotbar, {7, 1} as Item);
+        add_item(*player_hotbar, {8, 1} as Item);
     }
 
     if !is_thirdperson   player.tr.rotation = slerp(0.4, player.tr.rotation, world_cam.transform.rotation);
@@ -454,9 +473,24 @@ void player_control() {
     if !is_thirdperson  world_cam.transform.position = player.tr.position;
 }
 
-void item_action(BlockRaycastResult target, Item* item) {
+void item_action(BlockRaycastResult target, Item* item, float32 dt) {
 
     ItemInfo item_info = item_infos[item.id];
+
+    bool tool_swung = false;
+    float32 tool_swing_power = 0;
+
+    if item_info.tool {
+        if mouse_down(mouse_primary_action) { // use tool
+            player_tool_charge = clamp01(player_tool_charge + 2*dt);
+        } else if mouse_released(mouse_primary_action) {
+            tool_swing_power = player_tool_charge;
+            player_tool_charge = 0;
+            tool_swung = true;
+        }
+    }
+
+
     if target.block_id {
         BlockInfo block_info = block_types[target.block_id];
 
@@ -464,7 +498,7 @@ void item_action(BlockRaycastResult target, Item* item) {
             if item_info.tool == block_info.tool {
                 gizmo_box(make_vec(target.coord), vec3_one, Black);
 
-                if mouse_pressed(mouse_primary_action) {
+                if tool_swung and tool_swing_power > 0.7 {
                     set_block(target.coord, 0);
 
                     Item item = {block_info.drop, 1};
