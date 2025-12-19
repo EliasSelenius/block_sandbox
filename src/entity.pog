@@ -196,6 +196,51 @@ void world_update(World* w, float32 dt) {
     }
 }
 
+vec2 ray_aabb_intersects(vec3 o,d,  l,h) {
+    vec3 t_low  = (l - o) / d;
+    vec3 t_high = (h - o) / d;
+    vec3 t_close = min(t_low, t_high);
+    vec3 t_far   = max(t_low, t_high);
+
+    return make_vec(max_axis(t_close), min_axis(t_far));
+}
+
+struct Entity_Raycast_Result {
+    Entity* en;
+    vec3 hit_point;
+    float32 min_dist, max_dist;
+}
+
+Entity_Raycast_Result entity_raycast(World* w, vec3 o,d, float32 max_dist) {
+    Entity_Raycast_Result result = {};
+    float32 dist = max_dist;
+
+    for 0 .. list_length(w.entity_pool) {
+        let en = *w.entity_pool[it];
+
+        vec3 pos = en.tr.position + en.aabb.center;
+        vec3 hsize = en.aabb.size*0.5;
+
+        vec3 p1 = pos - hsize;
+        vec3 p2 = pos + hsize;
+        vec2 ts = ray_aabb_intersects(o,d, p1, p2);
+        float32 min_d = ts.x;
+        float32 max_d = ts.y;
+
+        if min_d > 0.0
+        if min_d <= max_d
+        if min_d <= dist {
+            result.en = en;
+            result.min_dist = min_d;
+            result.max_dist = max_d;
+            result.hit_point = o + d * result.min_dist;
+            dist = min_d;
+        }
+    }
+
+    return result;
+}
+
 void draw_quad(DeferredRenderer* R, Sprite sprite, Material_PBR material, mat4 model) {
     update_buffer(R.ubo_model.buffer_id, sizeof mat4, *model);
 

@@ -330,20 +330,13 @@ void main() {
     }
 }
 
-struct BlockRaycastResult {
+struct Block_Raycast_Result {
     ivec3 coord, prev_coord;
     uint16 block_id;
     float32 dist;
 }
 
-BlockRaycastResult grid_raycast(float32 max_dist) {
-
-    vec2 cursor_pos = Input.mouse_pos;
-    if !is_thirdperson and !is_freecam  cursor_pos = vec2_zero;
-
-    update_matrices(*world_cam);
-    let o = world_cam.transform.position;
-    let d = camera_ray(world_cam, cursor_pos);
+Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
     let ts = start_traversal(o, d);
     ivec3 prev_coord = {};
 
@@ -354,7 +347,7 @@ BlockRaycastResult grid_raycast(float32 max_dist) {
 
         uint16 id = get_block(ts.coord);
         if id {
-            BlockRaycastResult result = {};
+            Block_Raycast_Result result = {};
             result.block_id = id;
             result.dist = dist;
             result.coord = ts.coord;
@@ -455,8 +448,7 @@ void player_control(float32 dt) {
             }
         }
 
-        let target = grid_raycast(5);
-        item_action(target, item_hand, dt);
+        item_action(item_hand, dt);
     }
 
     if key_pressed('F') {
@@ -467,15 +459,32 @@ void player_control(float32 dt) {
         add_item(*player_hotbar, {8, 1} as Item);
     }
 
+    if key_pressed(Key.P) {
+        vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
+        spawn_entity(player.tr.position, look_dir*8);
+    }
+
+
     if !is_thirdperson   player.tr.rotation = slerp(0.4, player.tr.rotation, world_cam.transform.rotation);
 
     entity_update(*player, dt);
     if !is_thirdperson  world_cam.transform.position = player.tr.position;
 }
 
-void item_action(BlockRaycastResult target, Item* item, float32 dt) {
+void item_action(Item* item, float32 dt) {
 
     ItemInfo item_info = item_infos[item.id];
+
+    vec2 cursor_pos = cursor_enabled() ? Input.mouse_pos : vec2_zero;
+    update_matrices(*world_cam);
+    let o = world_cam.transform.position;
+    let d = camera_ray(world_cam, cursor_pos);
+
+
+    // TODO: we seem to have further reach with entity_raycast than grid_raycast so one of them must have a bug! related to distance calc
+    float32 reach = 5;
+    let target_block = grid_raycast(o,d, reach);
+    let target_entity = entity_raycast(*world, o,d, reach);
 
     bool tool_swung = false;
     float32 tool_swing_power = 0;
@@ -490,28 +499,44 @@ void item_action(BlockRaycastResult target, Item* item, float32 dt) {
         }
     }
 
+    bool is_entity = target_entity.en != null;
+    bool is_block = target_block.block_id != 0;
 
-    if target.block_id {
-        BlockInfo block_info = block_types[target.block_id];
+    if is_entity and is_block {
+        is_entity = target_entity.min_dist <= target_block.dist;
+        is_block = !is_entity;
+    }
+
+    if is_entity {
+        gizmo_point(target_entity.hit_point, Red, 0.05);
+
+        if tool_swung {
+            uint32 damage = 10 * tool_swing_power;
+            Entity* victim = target_entity.en;
+            victim.vel = victim.vel + d*10;
+        }
+
+    } else if is_block {
+        BlockInfo block_info = block_types[target_block.block_id];
 
         if item_info.tool {
             if item_info.tool == block_info.tool {
-                gizmo_box(make_vec(target.coord), vec3_one, Black);
+                gizmo_box(make_vec(target_block.coord), vec3_one, Black);
 
                 if tool_swung and tool_swing_power > 0.7 {
-                    set_block(target.coord, 0);
+                    set_block(target_block.coord, 0);
 
-                    Item item = {block_info.drop, 1};
-                    spawn_item(make_vec(target.coord), random_unit_vec3() * 3, item, 0.3);
+                    Item item_drop = {block_info.drop, 1};
+                    spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
 
-                    // add_item(*player_hotbar, item);
+                    // add_item(*player_hotbar, item_drop);
                 }
             }
         } else if item_info.block_id {
-            gizmo_box(make_vec(target.prev_coord), vec3_one, Black);
+            gizmo_box(make_vec(target_block.prev_coord), vec3_one, Black);
 
             if mouse_pressed(mouse_secondary_action) {
-                set_block(target.prev_coord, item_info.block_id);
+                set_block(target_block.prev_coord, item_info.block_id);
                 item_count(item, -1);
             }
         }
