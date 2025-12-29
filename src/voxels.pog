@@ -4,7 +4,7 @@ const Render_Radius = 4;
 const Chunk_Pool_Size = Render_Radius*2 + 1;
 const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
 
-const Chunk_Size = 16;
+const Chunk_Size = 32;
 const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 
 Chunk[Pool_Size] chunk_pool;

@@ -38,98 +38,6 @@ include "src/entity.pog";
 */
 
 
-enum Blend {
-    Overwrite;
-    Lerp_Src_Alpha;
-    Add;
-}
-
-void set_blend_mode(Blend blend) switch (blend) {
-    case .Overwrite: glDisable(GL_BLEND); break;
-    case .Lerp_Src_Alpha:
-        glEnable(GL_BLEND);
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        break;
-    case .Add:
-        glEnable(GL_BLEND);
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFunc(GL_ONE, GL_ONE);
-        break;
-}
-
-enum DepthTest {
-    Disabled;
-    Never; // GL_NEVER
-    Less; // GL_LESS
-    Equal; // GL_EQUAL
-    Less_Equal; // GL_LEQUAL
-    Greater; // GL_GREATER
-    Not_Equal; // GL_NOTEQUAL
-    Greater_Equal; // GL_GEQUAL
-    Always; // GL_ALWAYS
-}
-
-void set_depth_mode(DepthTest dt) switch (dt) {
-    case .Disabled:      glDisable(GL_DEPTH_TEST); break;
-    case .Never:         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_NEVER); break;
-    case .Less:          glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LESS); break;
-    case .Equal:         glEnable(GL_DEPTH_TEST); glDepthFunc(GL_EQUAL); break;
-    case .Less_Equal:    glEnable(GL_DEPTH_TEST); glDepthFunc(GL_LEQUAL); break;
-    case .Greater:       glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GREATER); break;
-    case .Not_Equal:     glEnable(GL_DEPTH_TEST); glDepthFunc(GL_NOTEQUAL); break;
-    case .Greater_Equal: glEnable(GL_DEPTH_TEST); glDepthFunc(GL_GEQUAL); break;
-    case .Always:        glEnable(GL_DEPTH_TEST); glDepthFunc(GL_ALWAYS); break;
-}
-
-// enum Cull { None; Front; Back; All; }
-// void set_cull_mode(Cull cull) switch (cull) {
-//     case .None:  glDisable(GL_CULL_FACE); break;
-//     case .Front: glEnable(GL_CULL_FACE); glCullFace(GL_FRONT); break;
-//     case .Back:  glEnable(GL_CULL_FACE); glCullFace(GL_BACK); break;
-//     case .All:   glEnable(GL_CULL_FACE); glCullFace(GL_FRONT_AND_BACK); break;
-// }
-
-enum Poly { Cull; Point; Line; Fill; }
-void set_face_render_mode(Poly front, back) {
-    void polymode(GLenum face, Poly mode) switch (mode) {
-        case .Cull:  glEnable(GL_CULL_FACE); glCullFace(face); break;
-        case .Point: glPolygonMode(face, GL_POINT); break;
-        case .Line:  glPolygonMode(face, GL_LINE); break;
-        case .Fill:  glPolygonMode(face, GL_FILL); break;
-    }
-
-    glDisable(GL_CULL_FACE);
-    if front == back {
-        polymode(GL_FRONT_AND_BACK, front);
-    } else {
-        polymode(GL_FRONT, front);
-        polymode(GL_BACK, back);
-    }
-}
-
-struct RenderPass {
-    Poly front;
-    Poly back;
-    Blend blend;
-    DepthTest depth_test;
-    bool depth_write;
-}
-
-void start_render_pass(RenderPass pass) {
-    set_face_render_mode(pass.front, pass.back);
-    set_blend_mode(pass.blend);
-    set_depth_mode(pass.depth_test);
-    glDepthMask(pass.depth_write);
-}
-
-RenderPass pass_world = {
-    front = Poly.Fill, back = Poly.Cull,
-    blend = Blend.Overwrite,
-    depth_test = DepthTest.Less_Equal,
-    depth_write = true
-};
-
 RenderLayer static_ui;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
@@ -328,6 +236,53 @@ void main() {
         dispatch_layer(*static_ui, {scale=1} as Transform2D);
         dispatch_sprites({scale=1} as Transform2D);
     }
+}
+
+bool checkbox(UI_Rect rect, char* label) {
+
+    struct Checkbox_State {
+        char* label;
+        float32 time;
+        bool state;
+    }
+
+    static Checkbox_State[..] checkboxes = list_create(sizeof Checkbox_State);
+    Checkbox_State* cb = null;
+    for 0 .. list_length(checkboxes) {
+        let c = *checkboxes[it];
+        if c.label == label {
+            cb = c;
+            break;
+        }
+    }
+
+    if cb == null {
+        cb = list_append(*checkboxes);
+        @cb = {};
+        cb.label = label;
+    }
+
+
+    Color color = opacity(Black, 0.5);
+
+    if hover(rect, Input.mouse_pos) {
+        if mouse_pressed(MouseButton.Left) {
+            cb.state = !cb.state;
+        }
+
+        color = opacity(Black, 0.8);
+    }
+
+    draw_rect(rect, color);
+
+    UI_Rect check = rect;
+    check.size = check.size*0.5;
+    draw_rect(check, White);
+
+    vec2 text_pos = rect.center + { rect.size.x/2.0 + rect.size.x/4.0, 0 };
+    draw_text(text_pos, rect.size.y, label, White);
+
+    return cb.state;
 }
 
 struct Block_Raycast_Result {

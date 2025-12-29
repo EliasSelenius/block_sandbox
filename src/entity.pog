@@ -420,7 +420,7 @@ void open_inventory(Inventory* hotbar, backpack, chest) {
     float32 slot_size = 1.2 / 9;
 
     float32 px = 2.0 / app.window_height;
-    float32 bottom_padding = slot_size/6.0;
+    float32 bottom_padding = slot_size*4; // slot_size/6.0;
 
     float32 padding = slot_size/4.0;
 
@@ -478,9 +478,13 @@ void stack_item(UI_Slot* dst, src) {
         @src.item = temp;
     }
 
-    vec2 temp_pos = dst.pos;
-    dst.pos = src.pos;
-    src.pos = temp_pos;
+    swap(*dst.pos, *src.pos);
+}
+
+void swap(vec2* a, b) {
+    vec2 t = @a;
+    @a = @b;
+    @b = t;
 }
 
 void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
@@ -489,24 +493,7 @@ void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
 
     for 0 .. slots.elements_count {
         UI_Slot* slot = *slots.elements[it];
-        if hover(slot.rect, Input.mouse_pos) {
-            state.hover_slot = slot;
-            state.slots_to_swap_to = next;
-        }
-
-        Color color = lerp(slot.hover_t, opacity(Black, 0.6), opacity(Gray, 0.8));
-
-        float32 padding = 4*px;
-        draw_rect(pad(slot.rect, padding), color);
-
-        float32 item_scale = lerp(slot.hover_t, 1, 1.2);
-        UI_Rect item_rect = {slot.pos, slot.rect.size * item_scale};
-        draw_item(item_rect, @slot.item);
-
-        update_slot(slot, slot.rect.center, dt);
-
-        // slot.pos = exp_decay(slot.pos, slot.rect.center, 10, dt);
-        slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 5, dt));
+        draw_slot(state, slot, true, next, dt);
     }
 }
 
@@ -523,7 +510,6 @@ void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots
         draw_rect(pad(slot.rect, padding), color);
     }
 
-
     float32 item_scale = lerp(slot.hover_t, 1, 1.2);
     UI_Rect item_rect = {slot.pos, slot.rect.size * item_scale};
     draw_item(item_rect, @slot.item);
@@ -536,13 +522,15 @@ void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots
 void draw_inventory() {
     float32 dt = deltatime();
     let state = *ui_inventory_state;
+    float32 slot_size = 1.2 / 9;
 
     state.hover_slot = null;
     draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
     draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
 
     { // crafting
-        draw_rect(state.crafting.rect, opacity(Black, 0.6));
+        UI_Rect craft_rect = state.crafting.rect;
+        draw_rect(craft_rect, opacity(Black, 0.6));
         for 0 .. list_length(state.crafting.slots) {
             UI_Slot* slot = *state.crafting.slots[it];
             draw_slot(state, slot, true, *state.slots_backpack, dt);
@@ -550,6 +538,13 @@ void draw_inventory() {
 
         for 0 .. recipes.length {
             Recipe rec = recipes[it];
+            UI_Rect rec_rect = craft_rect;
+            rec_rect.size.y = slot_size;
+            rec_rect.center.y -= it * slot_size;
+
+            draw_rect(rec_rect, opacity(Black, 0.9));
+
+            // draw_item()
         }
     }
 
@@ -567,7 +562,7 @@ void draw_inventory() {
             if dest {
                 draw_rect(dest.rect, opacity(White, 0.2));
                 if mouse_down(MouseButton.Left) {
-                    stack_item(dest, hover);
+                    if hover.item.id != 0  stack_item(dest, hover);
                 }
             }
         } else {
