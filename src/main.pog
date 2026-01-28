@@ -39,7 +39,9 @@ include "src/entity.pog";
     items:
         stick        drops from bush/leaves
         plant fiber  drops from bush/grass
-        
+
+
+
 
 */
 
@@ -77,20 +79,37 @@ struct BlockInfo {
     ToolType tool;
 }
 
-const Block_Type_Count = 5;
-BlockInfo[Block_Type_Count] block_types = {
+BlockInfo[] block_infos = {
     {"Air"},
-    {"Stone",   "stone.bmp",    tool = .Pickaxe,  drop = 1 },
-    {"Soil",    "soil.bmp",     tool = .Shovel,   drop = 2 },
-    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = 3 },
-    {"Gravel",  "gravel.bmp",   tool = .Shovel,   drop = 7 }
+    {"Stone",   "stone.bmp",    tool = .Pickaxe,  drop = ItemIds.Stone },
+    {"Soil",    "soil.bmp",     tool = .Shovel,   drop = ItemIds.Soil },
+    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = ItemIds.Grass },
+    {"Gravel",  "gravel.bmp",   tool = .Shovel,   drop = ItemIds.Flint_Rock },
+    {"Log",     "log.bmp",      tool = .Axe,      drop = ItemIds.Log },
+    {"Leaves",  "leaves.bmp",   tool = .Any,     drop = ItemIds.Stick }
 };
 
-enum ToolType {
-    None; Axe; Pickaxe; Shovel;
+enum BlockIds {
+    Air;
+    Stone;
+    Soil;
+    Grass;
+    Gravel;
+    Log;
+    Leaves;
 }
 
-struct Item { uint32 id, count; }
+
+enum ToolType {
+    None    = 0;
+    Hand    = 1;
+    Axe     = 2;
+    Pickaxe = 4;
+    Shovel  = 8;
+    Any     = 15; // ToolType.Hand | ToolType.Axe | ToolType.Pickaxe | ToolType.Shovel;
+}
+
+struct Item { ItemIds id; uint32 count; }
 struct ItemInfo {
     char* name;
     char* image_file_name;
@@ -98,28 +117,49 @@ struct ItemInfo {
     uint32 sprite_index;
     ToolType tool;
     uint16 block_id;
-
 }
 
 ItemInfo[] item_infos = {
     {},
-    {"Stone",   "stone.bmp",    block_id = 1 },
-    {"Soil",    "soil.bmp",     block_id = 2 },
-    {"Grass",   "grass.bmp",    block_id = 3 },
+    {"Stone",   "stone.bmp",    block_id = BlockIds.Stone },
+    {"Soil",    "soil.bmp",     block_id = BlockIds.Soil },
+    {"Grass",   "grass.bmp",    block_id = BlockIds.Grass },
+    {"Log",     "log.bmp",      block_id = BlockIds.Log },
+    {"Leaves",  "leaves.bmp",   block_id = BlockIds.Leaves },
     {"Flint Hatchet", sprite_index = 0, tool = .Axe},
     {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
     {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe},
     {"Rock",          sprite_index = 3 },
-    {"Flint Rock",    sprite_index = 4 }
+    {"Flint Rock",    sprite_index = 4 },
+    {"Stick",         sprite_index = 5 },
+    {"Plant Fiber",   sprite_index = 6 }
 };
 
+enum ItemIds {
+    None;
+    Stone;
+    Soil;
+    Grass;
+    Log;
+    Leaves;
+    Flint_Hatchet;
+    Wood_Shovel;
+    Flint_Pickaxe;
+    Rock;
+    Flint_Rock;
+    Stick;
+    Plant_Fiber;
+}
+
 struct Recipe {
-    Item product;
-    Item[] ingredient;
+    Item output;
+    Item[] input;
 }
 
 Recipe[] recipes = {
-    { product={4, 1}, ingredient={{8, 1}} }
+    { output={.Flint_Hatchet, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Plant_Fiber, 1}} },
+    { output={.Flint_Pickaxe, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Plant_Fiber, 1}} },
+    { output={.Wood_Shovel,   1}, input={{.Stick, 2}, {.Plant_Fiber, 1}} }
 };
 
 Sprite sub_sprite(Sprite sp, uint32 sprite_index, sprite_pixel_size, num_cells) {
@@ -164,14 +204,14 @@ void main() {
         db_quad3D = create_draw_buffers(verts, inds);
     }
 
-    uint32 ss_size = (floorf(sqrtf(Block_Type_Count as float32)) + 1) as uint32;
+    uint32 ss_size = (floorf(sqrtf(block_infos.length as float32)) + 1) as uint32;
     Image spritesheet = {};
     spritesheet.width = ss_size * 16;
     spritesheet.height = ss_size * 16;
     spritesheet.pixels = calloc(spritesheet.width * spritesheet.height, sizeof Color);
 
-    for 0 .. Block_Type_Count {
-        let bi = *block_types[it];
+    for 0 .. block_infos.length {
+        let bi = *block_infos[it];
         if bi.image_file_name {
             bi.image = load_bitmap(concat("assets/", bi.image_file_name));
 
@@ -349,7 +389,10 @@ void player_move_input(Entity* en, Camera cam, float32 dt) {
 
     vec3 target_vel = movement*max_speed;
     target_vel.y = en.vel.y;
-    en.vel = move(en.vel, target_vel, acceleration*dt);
+
+    if sqlength(Input.wasd) > 0 {
+        en.vel = move(en.vel, target_vel, acceleration*dt);
+    }
 
     if en.is_grounded {
         if key_pressed(key_jump)  en.vel.y += 5;
@@ -417,11 +460,9 @@ void player_control(float32 dt) {
     }
 
     if key_pressed('F') {
-        add_item(*player_hotbar, {4, 1} as Item);
-        add_item(*player_hotbar, {5, 1} as Item);
-        add_item(*player_hotbar, {6, 1} as Item);
-        add_item(*player_hotbar, {7, 1} as Item);
-        add_item(*player_hotbar, {8, 1} as Item);
+        for 1 .. item_infos.length {
+            player_recive_item({it, 1} as Item);
+        }
     }
 
     if key_pressed(Key.P) {
@@ -482,10 +523,10 @@ void item_action(Item* item, float32 dt) {
         }
 
     } else if is_block {
-        BlockInfo block_info = block_types[target_block.block_id];
+        BlockInfo block_info = block_infos[target_block.block_id];
 
         if item_info.tool {
-            if item_info.tool == block_info.tool {
+            if item_info.tool & block_info.tool {
                 gizmo_box(make_vec(target_block.coord), vec3_one, Black);
 
                 if tool_swung and tool_swing_power > 0.7 {
@@ -548,7 +589,7 @@ void draw_world(DeferredRenderer* R, Camera cam) {
         };
 
         // uint32 gl_texture = white_texture.gl_handle;
-        // uint32 gl_texture = block_types[1].texture.gl_handle;
+        // uint32 gl_texture = block_infos[1].texture.gl_handle;
         uint32 gl_texture = texture_spritesheet.gl_handle;
 
         float32 size = Chunk_Size;

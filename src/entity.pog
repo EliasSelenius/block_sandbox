@@ -18,6 +18,10 @@ float32 player_tool_charge = 0;
 
 Item* player_held_item() return *player_hotbar.items[hotbar_selected_slot];
 
+bool player_recive_item(Item item) {
+    return add_item(*player_hotbar, item) or add_item(*player_backpack, item);
+}
+
 enum Entitykind {
     Player;
     Item;
@@ -179,7 +183,7 @@ void entity_update(Entity* en, float32 dt) {
         if sqdist(player.tr.position, en.tr.position) < sq(1.5) and en.cooldown <= 0.0 {
             look_at(*en.tr, player.tr.position);
 
-            if add_item(*player_hotbar, en.item_stack) or add_item(*player_backpack, en.item_stack) {
+            if player_recive_item(en.item_stack) {
                 list_remove(world.entity_pool, en);
             }
         }
@@ -377,6 +381,45 @@ bool add_item(Inventory* inv, Item item) {
     return false;
 }
 
+uint32 take_item(Inventory* inv, Item desc) {
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if item.id == desc.id {
+            uint32 amount = min(item.count, desc.count);
+            item_count(item, -amount);
+            desc.count -= amount;
+            if desc.count == 0 break;
+        }
+    }
+
+    return desc.count;
+}
+
+uint32 item_total(Inventory* inv, ItemIds id) {
+    uint32 total = 0;
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if item.id == id  total += item.count;
+    }
+    return total;
+}
+
+bool player_craft(Recipe rec) {
+    for 0 .. rec.input.length {
+        Item ing = rec.input[it];
+        uint32 total = item_total(*player_backpack, ing.id) + item_total(*player_hotbar, ing.id);
+
+        if total < ing.count return false;
+    }
+
+    for 0 .. rec.input.length {
+        Item ing = rec.input[it];
+        ing.count = take_item(*player_backpack, ing);
+        ing.count = take_item(*player_hotbar,   ing);
+    }
+
+    return true;
+}
 
 struct UI_Slot {
     Item* item;
@@ -520,6 +563,7 @@ void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots
 }
 
 void draw_inventory() {
+    float32 px = 2.0 / app.window_height;
     float32 dt = deltatime();
     let state = *ui_inventory_state;
     float32 slot_size = 1.2 / 9;
@@ -538,13 +582,34 @@ void draw_inventory() {
 
         for 0 .. recipes.length {
             Recipe rec = recipes[it];
-            UI_Rect rec_rect = craft_rect;
-            rec_rect.size.y = slot_size;
-            rec_rect.center.y -= it * slot_size;
+            UI_Rect rect_rec = child(craft_rect, 0,1, craft_rect.size.x, slot_size);
+            rect_rec.center.y -= it * (slot_size + 4*px);
+            UI_Rect rect_output = child(rect_rec, 1,0, slot_size, slot_size);
 
-            draw_rect(rec_rect, opacity(Black, 0.9));
+            Color color_bg = Black;
 
-            // draw_item()
+            if is_item(state.select_item) == false {
+                if hover(rect_rec, Input.mouse_pos) {
+                    color_bg = White;
+                    if mouse_pressed(MouseButton.Left) {
+                        if player_craft(rec) {
+                            state.select_item = rec.output;
+                            state.select_slot.pos = rect_output.center;
+                        } else {
+                            color_bg = Red;
+                        }
+                    }
+                }
+            }
+
+            draw_rect(rect_rec, opacity(color_bg, 0.6));
+            draw_item(rect_output, rec.output);
+
+            for 0 .. rec.input.length {
+                Item ing = rec.input[it];
+                UI_Rect rect_ing = translate(child(rect_rec, -1,0, slot_size, slot_size), (slot_size+4*px)*it, 0);
+                draw_item(rect_ing, ing);
+            }
         }
     }
 
@@ -588,12 +653,13 @@ void draw_inventory() {
             draw_text(*static_ui_foreground, pos, glyph_height, str, White);
         }
 
-    } else if hover(state.crafting.rect, Input.mouse_pos) {
-        if mouse_pressed(MouseButton.Left) and state.select_item.id {
-            UI_Slot* slot = list_append(*state.crafting.slots);
-            
-        }
     }
+    // else if hover(state.crafting.rect, Input.mouse_pos) {
+    //     if mouse_pressed(MouseButton.Left) and state.select_item.id {
+    //         UI_Slot* slot = list_append(*state.crafting.slots);
+            
+    //     }
+    // }
 
     if state.select_item.id {
         UI_Slot* slot = *state.select_slot;

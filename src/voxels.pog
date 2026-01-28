@@ -101,24 +101,22 @@ void init_chunk(Chunk* chunk, ivec3 coord) {
         chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
     }
 
-    // for z: 0 .. Chunk_Size  for y: 0 .. Chunk_Size  for x: 0 .. Chunk_Size {
-    //     uint16 block_id = 0;
-    //     if random() < -0.3 {
-    //         block_id = 1;
-    //     }
-
-    //     chunk.blocks[get_index(x, y, z)] = block_id;
-    // }
-
     int32 s = Chunk_Size;
     for z: 0 .. s for x: 0 .. s {
-        vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s) * 0.1;
+        vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s);
 
-        float32 t = (gnoise(make_vec(pos, 0))+1.0)/2.0;
+        float32 t = (gnoise(make_vec(pos*0.1, 0))+1.0)/2.0;
         int32 height = lerp(t, 0, 16.0) as int32;
         for y: 0 .. s {
-            uint16 block_id = 0;
-            if y <= height block_id = random_range(1, Block_Type_Count) as uint16;
+            uint16 block_id = BlockIds.Air;
+
+            int32 depth = height - y;
+            if depth >= 0 {
+                if depth == 0     block_id = BlockIds.Grass;
+                else if depth < 3 block_id = BlockIds.Soil;
+                else              block_id = BlockIds.Stone;
+            }
+
             chunk.blocks[get_index(x, y, z)] = block_id;
         }
     }
