@@ -64,7 +64,7 @@ Entity* spawn_entity(vec3 pos, vel) {
     Entity* en = list_append(*world.entity_pool);
     @en = {};
     en.kind = .Player;
-    en.aabb = box_player
+    en.aabb = box_player;
     en.tr = transform_default();
     en.tr.position = pos;
     en.vel = vel;
@@ -574,6 +574,20 @@ void draw_inventory() {
                 // 
             }
         }
+
+        if hover and !select.item.id {
+            float32 glyph_height = 0.07;
+            ItemInfo item_info = item_infos[hover.item.id];
+            string str = make_string(item_info.name);
+            UI_Rect rect = {};
+            rect.size = text_size(str, glyph_height);
+            rect = place(rect, -1, -1, Input.mouse_pos);
+            draw_rect(*static_ui_foreground, rect, opacity(Black, 0.7));
+
+            vec2 pos = center_text(rect, glyph_height, str);
+            draw_text(*static_ui_foreground, pos, glyph_height, str, White);
+        }
+
     } else if hover(state.crafting.rect, Input.mouse_pos) {
         if mouse_pressed(MouseButton.Left) and state.select_item.id {
             UI_Slot* slot = list_append(*state.crafting.slots);
@@ -626,7 +640,7 @@ void draw_item(UI_Rect rect, Item item) {
     txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
     txt_rect = bottom_right(txt_rect, rect);
 
-    draw_text(center_text(txt_rect, glyph_height, text), glyph_height, text, White);
+    draw_text(*static_ui_foreground, center_text(txt_rect, glyph_height, text), glyph_height, text, White);
 }
 
 void draw_hotbar(Inventory* hotbar, uint32 index) {

@@ -7,6 +7,7 @@ include "src/entity.pog";
 
 
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
+// ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g
 
 /* TODOs:
 
@@ -35,10 +36,16 @@ include "src/entity.pog";
 
     - crafting:
 
+    items:
+        stick        drops from bush/leaves
+        plant fiber  drops from bush/grass
+        
+
 */
 
 
 RenderLayer static_ui;
+RenderLayer static_ui_foreground;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
 Shader shader_voxel_chunk;
@@ -139,6 +146,7 @@ void main() {
     R.sun_ambient_factor = 0.05;
 
     static_ui = create_layer();
+    static_ui_foreground = create_layer();
     immediate_layer = *static_ui;
 
     {
@@ -235,16 +243,18 @@ void main() {
         gizmo_dispatch();
         dispatch_layer(*static_ui, {scale=1} as Transform2D);
         dispatch_sprites({scale=1} as Transform2D);
+        dispatch_layer(*static_ui_foreground, {scale=1} as Transform2D);
     }
+}
+
+struct Checkbox_State {
+    char* label;
+    float32 time;
+    bool state;
 }
 
 bool checkbox(UI_Rect rect, char* label) {
 
-    struct Checkbox_State {
-        char* label;
-        float32 time;
-        bool state;
-    }
 
     static Checkbox_State[..] checkboxes = list_create(sizeof Checkbox_State);
     Checkbox_State* cb = null;
@@ -549,7 +559,10 @@ void draw_world(DeferredRenderer* R, Camera cam) {
             chunk.must_remesh = false;
         }
 
-        start_render_pass(pass_world);
+
+        set_depth_mode(DepthTest.Less_Equal, true);
+        set_blend_mode(Blend.Overwrite);
+        set_face_render_mode(Poly.Fill, Poly.Cull);
         draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
     }
 
