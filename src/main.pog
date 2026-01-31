@@ -23,7 +23,6 @@ include "src/entity.pog";
     - running
     - crouch
 
-    - block: wood log
     - hand held item swing animation
     - hand held item should react to player momentum
 
@@ -41,8 +40,6 @@ include "src/entity.pog";
         plant fiber  drops from bush/grass
 
 
-
-
 */
 
 
@@ -55,6 +52,7 @@ Shader shader_voxel_chunk;
 Texture2D texture_spritesheet;
 
 DrawBuffers db_quad3D;
+DrawBuffers db_cube;
 
 bool is_freecam = true;
 bool is_thirdperson = false;
@@ -74,7 +72,8 @@ struct BlockInfo {
 
     char* image_file_name;
     Image image;
-    Texture2D texture;
+    Sprite sprite;
+
     uint32 drop;
     ToolType tool;
 }
@@ -219,15 +218,23 @@ void main() {
             uint32 y = (it / ss_size) * 16;
 
             image_blit(spritesheet, bi.image, x, y);
-
-            bi.texture = create_texture2D(bi.image);
-            set_filter(bi.texture, TextureFilter.nearest);
         }
     }
 
     texture_spritesheet = create_texture2D(spritesheet);
     set_filter(texture_spritesheet, TextureFilter.nearest);
     free(spritesheet.pixels);
+
+    for 0 .. block_infos.length {
+        let bi = *block_infos[it];
+        if bi.image_file_name {
+            bi.sprite.tex = texture_spritesheet;
+
+            float32 f = 16.0 / spritesheet.width;
+            bi.sprite.uv_offset = make_vec(it % ss_size, it / ss_size) * f;
+            bi.sprite.uv_scale = {f,f};
+        }
+    }
 
     Sprite items_spritesheet = make_sprite(load_texture2D("assets/items.bmp"));
 
@@ -241,6 +248,24 @@ void main() {
         } else {
             info.sprite = sub_sprite(items_spritesheet, info.sprite_index, 16, 4);
         }
+    }
+
+    {
+        let m = mesh_create();
+        vec3 center = {};
+
+        vec2 uv_offset = vec2_zero;
+        vec2 uv_scale  = vec2_one;
+
+        add_quad(*m, center, make_ivec(1,0,0),  uv_offset, uv_scale);
+        add_quad(*m, center, make_ivec(0,1,0),  uv_offset, uv_scale);
+        add_quad(*m, center, make_ivec(0,0,1),  uv_offset, uv_scale);
+        add_quad(*m, center, make_ivec(-1,0,0), uv_offset, uv_scale);
+        add_quad(*m, center, make_ivec(0,-1,0), uv_offset, uv_scale);
+        add_quad(*m, center, make_ivec(0,0,-1), uv_offset, uv_scale);
+
+        db_cube = create_draw_buffers(m);
+        mesh_free(m);
     }
 
     world_cam.transform.position = {-10, 32, -10};
@@ -260,9 +285,13 @@ void main() {
         }
 
         if key_pressed('R') {
-            let sh = *R.shader_geometry;
-            delete_shader(sh);
-            @sh = load_shader(sh.name.chars);
+            void rl(Shader* sh) {
+                delete_shader(sh);
+                @sh = load_shader(sh.name.chars);
+            }
+            rl(*R.shader_geometry);
+            rl(*default2d_shader);
+            rl(*ui_shader);
         }
 
 
@@ -343,7 +372,7 @@ struct Block_Raycast_Result {
 
 Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
     let ts = start_traversal(o, d);
-    ivec3 prev_coord = {};
+    ivec3 prev_coord = ts.coord;
 
     while true {
         traverse(*ts);
@@ -390,12 +419,23 @@ void player_move_input(Entity* en, Camera cam, float32 dt) {
     vec3 target_vel = movement*max_speed;
     target_vel.y = en.vel.y;
 
+    float32 player_friction(vec3 normal) {
+        static float32 player_default_friction = 0.8;
+        if almost_equals(1.0, dot(vec3_unit_y, normal)) return player_default_friction;
+        return 0.0;
+    }
+
+    en.cof_k = 0.8; //player_friction(deepest_inter.normal);
+    en.cof_s = 1.2 * en.cof_k;
+
     if sqlength(Input.wasd) > 0 {
         en.vel = move(en.vel, target_vel, acceleration*dt);
+        en.cof_k = 0;
+        en.cof_s = 0;
     }
 
     if en.is_grounded {
-        if key_pressed(key_jump)  en.vel.y += 5;
+        if key_pressed(key_jump)  en.vel.y += player_jump_vel();
     }
 
     draw_text(make_vec(0.1, 0), 0.05, to_string(length(en.vel)), White);
@@ -467,7 +507,8 @@ void player_control(float32 dt) {
 
     if key_pressed(Key.P) {
         vec3 look_dir = forward(world_cam.transform); // forward(player.tr);
-        spawn_entity(player.tr.position, look_dir*8);
+        // spawn_entity(player.tr.position, look_dir*8);
+        spawn_block_entity(player.tr.position, look_dir*15, BlockIds.Log);
     }
 
 
@@ -514,13 +555,18 @@ void item_action(Item* item, float32 dt) {
     }
 
     if is_entity {
+        Entity* en = target_entity.en;
         gizmo_point(target_entity.hit_point, Red, 0.05);
+
+        Color color_bb = White;
 
         if tool_swung {
             uint32 damage = 10 * tool_swing_power;
-            Entity* victim = target_entity.en;
-            victim.vel = victim.vel + d*10;
+            en.vel = en.vel + d*10;
+            color_bb = Red;
         }
+
+        gizmo_box(en.tr.position + en.aabb.center, en.aabb.size, color_bb);
 
     } else if is_block {
         BlockInfo block_info = block_infos[target_block.block_id];

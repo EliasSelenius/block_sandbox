@@ -4,7 +4,8 @@ Box box_player = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_hei
 
 Entity player = {
     tr = {scale=vec3_one, rotation=quat_identity},
-    aabb = box_player
+    aabb = box_player,
+    mass = 1.0
 };
 
 Inventory player_backpack = make_inventory(3, 9);
@@ -25,6 +26,7 @@ bool player_recive_item(Item item) {
 enum Entitykind {
     Player;
     Item;
+    Block;
 }
 
 struct Entity {
@@ -36,9 +38,14 @@ struct Entity {
     vec3 vel;
 
     Item item_stack;
+    uint16 block_id;
 
     float32 cooldown;
     uint32 hp;
+
+    float32 mass;
+    float32 bounciness;
+    float32 cof_k, cof_s;
 
     bool is_grounded;
 }
@@ -61,6 +68,11 @@ Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     en.tr.position = pos;
     en.vel = vel;
     en.cooldown = cooldown;
+
+    en.mass = 1.0;
+    en.bounciness = 0.8;
+    en.cof_k = 0.1;
+    en.cof_s = 1.2 * en.cof_k;
     return en;
 }
 
@@ -73,6 +85,28 @@ Entity* spawn_entity(vec3 pos, vel) {
     en.tr.position = pos;
     en.vel = vel;
     en.hp = 100;
+
+    en.mass = 1.0;
+    en.bounciness = 0.0;
+    en.cof_k = 0.5;
+    en.cof_s = 1.2 * en.cof_k;
+    return en;
+}
+
+Entity* spawn_block_entity(vec3 pos, vel, uint16 block_id) {
+    Entity* en = list_append(*world.entity_pool);
+    @en = {};
+    en.kind = .Block;
+    en.aabb = {vec3_zero, vec3_one};
+    en.tr = transform_default();
+    en.tr.position = pos;
+    en.vel = vel;
+    en.block_id = block_id;
+
+    en.mass = 1.0;
+    en.bounciness = 0.4;
+    en.cof_k = 0.5;
+    en.cof_s = 1.2 * en.cof_k;
     return en;
 }
 
@@ -150,34 +184,34 @@ void collide_aabb(Entity* en) {
         }
     }
 
-    float32 mass = 1.0;
-    float32 e = 0;
-    if en.kind == .Item {
-        e = 0.8;
-    }
-
-    float32 cof_k = 0.5;
-    float32 cof_s = 1.2 * cof_k;
-    if sqlength(Input.wasd) > 0 {
-        cof_k = 0.1;
-        cof_s = 0;
-    }
-
-    en.vel = calc_new_vel(en.vel, deepest_inter.normal, mass, e, cof_s, cof_k);
+    float32 mass = en.mass;
+    float32 e = en.bounciness;
+    en.vel = calc_new_vel(en.vel, deepest_inter.normal, mass, e, en.cof_s, en.cof_k);
     en.tr.position = en.tr.position + move;
 }
 
+float32 jump_height = 1.2;
+float32 jump_time   = 0.8;
 
+float32 player_gravity() return -8.0 * jump_height/sq(jump_time);
+float32 player_jump_vel() return 4.0 * jump_height/jump_time;
 
 void entity_update(Entity* en, float32 dt) {
-    en.vel.y -= 9.8*dt;
+
+    float32 g = -9.8;
+    if en == *player {
+        g = player_gravity();
+    }
+
+    en.vel.y += g*dt;
     en.tr.position = en.tr.position + en.vel*dt;
 
     if en.cooldown > 0.0   en.cooldown -= dt;
 
     collide_aabb(en);
 
-    if en.item_stack.id != 0 {
+    switch (en.kind) {
+    case .Item: {
         rotate(*en.tr, vec3_unit_y, Pi*dt);
 
         if sqdist(player.tr.position, en.tr.position) < sq(1.5) and en.cooldown <= 0.0 {
@@ -187,10 +221,16 @@ void entity_update(Entity* en, float32 dt) {
                 list_remove(world.entity_pool, en);
             }
         }
+    } break;
+
+    case .Player: {
+    } break;
+
+
+    case .Block: {
+        BlockInfo info = block_infos[en.block_id];
+    } break;
     }
-
-
-    gizmo_box(en.tr.position + en.aabb.center, en.aabb.size, White);
 }
 
 void world_update(World* w, float32 dt) {
@@ -245,21 +285,46 @@ Entity_Raycast_Result entity_raycast(World* w, vec3 o,d, float32 max_dist) {
     return result;
 }
 
-void draw_quad(DeferredRenderer* R, Sprite sprite, Material_PBR material, mat4 model) {
-    update_buffer(R.ubo_model.buffer_id, sizeof mat4, *model);
-
-    bind_texture2D(sprite.tex.gl_handle, 0);
-    set_uniform("u_uv_offset", sprite.uv_offset);
-    set_uniform("u_uv_scale", sprite.uv_scale);
+void set_material(Material_PBR material) {
     set_uniform("albedo_color", material.albedo);
     set_uniform("metallic",     material.metallic);
     set_uniform("roughness",    material.roughness);
-
-    glDisable(GL_CULL_FACE);
-    draw_elements(db_quad3D);
-    glEnable(GL_CULL_FACE);
 }
 
+void set_sprite(Sprite sprite) {
+    bind_texture2D(sprite.tex.gl_handle, 0);
+    set_uniform("u_uv_offset", sprite.uv_offset);
+    set_uniform("u_uv_scale", sprite.uv_scale);
+}
+
+void set_model_matrix(mat4 model) {
+    let ubo = get_ubo("Instances");
+    update_buffer(ubo.buffer_id, sizeof mat4, *model);
+}
+
+void draw_quad(Sprite sprite, Material_PBR material, mat4 model) {
+    set_model_matrix(model);
+    set_sprite(sprite);
+    set_material(material);
+
+    set_depth_mode(DepthTest.Less_Equal, true);
+    set_blend_mode(Blend.Overwrite);
+    set_face_render_mode(Poly.Fill, Poly.Fill);
+
+    draw_elements(db_quad3D);
+}
+
+void draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
+    set_model_matrix(model);
+    set_sprite(sprite);
+    set_material(material);
+
+    set_depth_mode(DepthTest.Less_Equal, true);
+    set_blend_mode(Blend.Overwrite);
+    set_face_render_mode(Poly.Fill, Poly.Cull);
+
+    draw_elements(db_cube);
+}
 
 /* TODO: thinking about how I want to add physics to items held in hand
 struct Physics {
@@ -296,22 +361,35 @@ void world_draw(DeferredRenderer* R, World* w) {
         quat tool_charge_rot = axis_angle(vec3_unit_z, d90 * player_tool_charge);
         let model = rotate(mat4_id, tool_charge_rot, bottom_left) * make_mat4(offset, vec3_one, rotation) * to_matrix(player.tr);
         Material_PBR mat = {{1,1,1}, 0.1, 0.1};
-        draw_quad(R, info.sprite, mat, model);
+        draw_quad(info.sprite, mat, model);
     }
 
 
     for 0 .. list_length(w.entity_pool) {
         let en = *w.entity_pool[it];
 
-        if en.item_stack.id {
+        Transform tr = en.tr;
+        tr.scale = tr.scale * en.aabb.size;
+        tr.position = tr.position + en.aabb.center;
+        mat4 model = to_matrix(tr);
+
+        Material_PBR mat = {{1,1,1}, 0.1, 0.1};
+
+        switch (en.kind) {
+        case .Item: {
             ItemInfo info = item_infos[en.item_stack.id];
 
-            Transform tr = en.tr;
-            tr.scale = tr.scale * en.aabb.size;
-            mat4 model = to_matrix(tr);
+            if info.block_id   draw_cube(info.sprite, mat, model);
+            else               draw_quad(info.sprite, mat, model);
+        } break;
 
-            Material_PBR mat = {{1,1,1}, 0.1, 0.1};
-            draw_quad(R, info.sprite, mat, model);
+        case .Player: {
+            draw_cube(make_sprite(white_texture), mat, model);
+        } break;
+        case .Block: {
+            BlockInfo info = block_infos[en.block_id];
+            draw_cube(info.sprite, mat, model);
+        } break;
         }
     }
 }
@@ -449,6 +527,8 @@ struct UI_Inventory_State {
     UI_Slot select_slot;
     Item select_item;
 
+    float32 item_tooltip_time;
+
     UI_Crafting crafting;
 }
 
@@ -568,6 +648,7 @@ void draw_inventory() {
     let state = *ui_inventory_state;
     float32 slot_size = 1.2 / 9;
 
+    let prev_hover_slot = state.hover_slot;
     state.hover_slot = null;
     draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
     draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
@@ -640,26 +721,13 @@ void draw_inventory() {
             }
         }
 
-        if hover and !select.item.id {
-            float32 glyph_height = 0.07;
-            ItemInfo item_info = item_infos[hover.item.id];
-            string str = make_string(item_info.name);
-            UI_Rect rect = {};
-            rect.size = text_size(str, glyph_height);
-            rect = place(rect, -1, -1, Input.mouse_pos);
-            draw_rect(*static_ui_foreground, rect, opacity(Black, 0.7));
 
-            vec2 pos = center_text(rect, glyph_height, str);
-            draw_text(*static_ui_foreground, pos, glyph_height, str, White);
+        if !select.item.id {
+            if prev_hover_slot != hover   state.item_tooltip_time = 0.0;
+            draw_item_tooltip(Input.mouse_pos, @hover.item, state.item_tooltip_time);
+            state.item_tooltip_time += dt;
         }
-
     }
-    // else if hover(state.crafting.rect, Input.mouse_pos) {
-    //     if mouse_pressed(MouseButton.Left) and state.select_item.id {
-    //         UI_Slot* slot = list_append(*state.crafting.slots);
-            
-    //     }
-    // }
 
     if state.select_item.id {
         UI_Slot* slot = *state.select_slot;
@@ -707,6 +775,30 @@ void draw_item(UI_Rect rect, Item item) {
     txt_rect = bottom_right(txt_rect, rect);
 
     draw_text(*static_ui_foreground, center_text(txt_rect, glyph_height, text), glyph_height, text, White);
+}
+
+void draw_item_tooltip(vec2 pos, Item item, float32 time) {
+    float32 transition_time = 0.2;
+    float32 t = clamp01(time / transition_time);
+
+    float32 opa = lerp(t, 0.0, 1.0);
+    float32 y =  lerp(t, -2, -1);
+
+    Color color_bg = opacity(Black, opa*0.7);
+    Color color_txt = opacity(White, opa);
+
+    ItemInfo item_info = item_infos[item.id];
+    string str = make_string(item_info.name);
+    float32 glyph_height = 0.07;
+
+    UI_Rect rect = {};
+    rect.size = text_size(str, glyph_height);
+    rect = place(rect, -1, y, pos);
+
+    draw_rect(*static_ui_foreground, rect, color_bg);
+
+    vec2 txt_pos = center_text(rect, glyph_height, str);
+    draw_text(*static_ui_foreground, txt_pos, glyph_height, str, color_txt);
 }
 
 void draw_hotbar(Inventory* hotbar, uint32 index) {

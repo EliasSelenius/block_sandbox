@@ -12,6 +12,7 @@ Chunk* last_chunk_interacted_with;
 
 
 struct Chunk {
+    float32* height_map; // TODO: in the future (when we use compute shaders) height map will not be a per chunk thing
     ivec3 coord;
     uint16[Chunk_Block_Count] blocks;
     Mesh mesh;
@@ -21,12 +22,21 @@ struct Chunk {
     Octree_Node[..] octree;
 }
 
+bool chunk_bound(ivec3 p) {
+    return  p.x >= 0 and p.x < Chunk_Size
+        and p.y >= 0 and p.y < Chunk_Size
+        and p.z >= 0 and p.z < Chunk_Size;
+}
+
 ivec3 block_coord(vec3 pos) return make_ivec(round(pos));
 ivec3 chunk_coord(ivec3 block_coord) return make_ivec(floor(make_vec(block_coord) / (Chunk_Size as float32)));
 ivec3 chunk_coord(vec3 pos) return chunk_coord(block_coord(pos));
 
 int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
+int32 get_index(int32 s, ivec3 v) return get_index(s, v.x, v.y, v.z);
+
 int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
+int32 get_index(ivec3 v) return get_index(v.x, v.y, v.z);
 
 Chunk* get_chunk(ivec3 chunk_coord) {
     for 0 .. Pool_Size {
@@ -92,37 +102,110 @@ void ensure_chunks() {
     list_delete(old_chunks);
 }
 
+float32 sample_terrain_noise(vec2 p) {
+    uint32 octaves = 8;
+    float32 h = 0.0;
+
+    for 0 .. octaves {
+        float32 d = 1.0 / pow(2, it);
+
+        float32 f = 100 * d;
+        float32 a = 64 * d;
+
+        float32 t = gnoise(make_vec(p/f, 0));
+        h += t*a;
+    }
+
+    return h;
+}
+
 void init_chunk(Chunk* chunk, ivec3 coord) {
+    int32 s = Chunk_Size;
+
     chunk.coord = coord;
     chunk.must_remesh = true;
 
     if chunk.db.vao == 0 {
         chunk.mesh = mesh_create();
         chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
+        chunk.height_map = malloc(s * s * sizeof float32);
     }
 
-    int32 s = Chunk_Size;
+
     for z: 0 .. s for x: 0 .. s {
         vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s);
 
-        float32 t = (gnoise(make_vec(pos*0.1, 0))+1.0)/2.0;
-        int32 height = lerp(t, 0, 16.0) as int32;
-        for y: 0 .. s {
-            uint16 block_id = BlockIds.Air;
+        float32 height = sample_terrain_noise(pos);
+        chunk.height_map[z * s + x] = height;
+    }
 
-            int32 depth = height - y;
-            if depth >= 0 {
-                if depth == 0     block_id = BlockIds.Grass;
-                else if depth < 3 block_id = BlockIds.Soil;
-                else              block_id = BlockIds.Stone;
-            }
+    for z: 0 .. s for x: 0 .. s
+    for y: 0 .. s {
+        uint16 block_id = BlockIds.Air;
+        float32 height = chunk.height_map[z * s + x];
+        int32 h = map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
 
-            chunk.blocks[get_index(x, y, z)] = block_id;
+        int32 depth = h - y;
+        if depth >= 0 {
+            if depth == 0     block_id = BlockIds.Grass;
+            else if depth < 3 block_id = BlockIds.Soil;
+            else              block_id = BlockIds.Stone;
         }
+
+        chunk.blocks[get_index(x, y, z)] = block_id;
+    }
+
+
+    int32 seed = 0;
+    for 0 .. 10 {
+        int32 x = (random01(seed++)*s) as int32;
+        int32 z = (random01(seed++)*s) as int32;
+
+        float32 height = chunk.height_map[z * s + x];
+        int32 h = map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
+
+        gen_tree(*seed, chunk, make_ivec(x, h, z));
     }
 }
 
-void add_quad(Mesh* m, uint16 block_id, vec3 p, ivec3 inorm) {
+void gen_tree(int32* seed, Chunk* chunk, ivec3 start_pos) {
+    int32 s = @seed;
+
+    int32 trunk_len = 6;
+
+    // for 0 .. trunk_len {
+    //     ivec3 pos = start_pos + {0, it, 0};
+    //     if chunk_bound(pos) chunk.blocks[get_index(pos)] = BlockIds.Log;
+    // }
+
+
+    vec3 start = make_vec(start_pos);
+    for 0 .. 2 {
+
+        float32 angle = random(s++)*Pi;
+        vec3 dir = {cosf(angle), random01(s++)*2, sinf(angle)} * random_range(s++, 2, 7);
+
+        vec3 end = start + dir;
+        set_line_segment(chunk, start, end, BlockIds.Log);
+        start = end;
+    }
+
+
+    @seed = s;
+}
+
+void set_line_segment(Chunk* chunk, vec3 start, end, BlockIds block_id) {
+    let ts = start_traversal(start, noz(end - start));
+    while true {
+        if equals(ts.coord, make_ivec(round(end))) break;
+        if !chunk_bound(ts.coord) break;
+
+        chunk.blocks[get_index(ts.coord)] = block_id;
+        traverse(*ts);
+    }
+}
+
+void add_quad(Mesh* m, vec3 p, ivec3 inorm, vec2 uv_offset, uv_scale) {
     uint32 i = list_length(m.vertices);
     add_tri(m, i+1, i+2, i+0);
     add_tri(m, i+3, i+2, i+1);
@@ -159,20 +242,14 @@ void add_quad(Mesh* m, uint16 block_id, vec3 p, ivec3 inorm) {
         cz = p2;
     }
 
-    uint32 ss_width = texture_spritesheet.width;
-    uint32 ss_size = ss_width / 16;
-    uint32 px = (block_id % ss_size) * 16;
-    uint32 py = (block_id / ss_size) * 16;
-    float32 x = (px as float32) / ss_width;
-    float32 y = (py as float32) / ss_width;
 
-    vec2 uv = {x, y};
-    float32 f = 16.0 / ss_width;
+    vec2 uv   = uv_offset;
+    vec2 uv_s = uv_scale;
 
-    add_vert(m, {p + {cx.x, cy.x, cz.x} as vec3, n, uv + {0,0} as vec2} as vertex3D);
-    add_vert(m, {p + {cx.y, cy.y, cz.y} as vec3, n, uv + {0,f} as vec2} as vertex3D);
-    add_vert(m, {p + {cx.z, cy.z, cz.z} as vec3, n, uv + {f,0} as vec2} as vertex3D);
-    add_vert(m, {p + {cx.w, cy.w, cz.w} as vec3, n, uv + {f,f} as vec2} as vertex3D);
+    add_vert(m, {p + {cx.x, cy.x, cz.x}, n, uv + uv_s*{0,0}} as vertex3D);
+    add_vert(m, {p + {cx.y, cy.y, cz.y}, n, uv + uv_s*{0,1}} as vertex3D);
+    add_vert(m, {p + {cx.z, cy.z, cz.z}, n, uv + uv_s*{1,0}} as vertex3D);
+    add_vert(m, {p + {cx.w, cy.w, cz.w}, n, uv + uv_s*{1,1}} as vertex3D);
 }
 
 void triangulate_chunk(Chunk* chunk) {
@@ -191,12 +268,18 @@ void triangulate_chunk(Chunk* chunk) {
         uint16 pz = z+1 < s  ? chunk.blocks[get_index(x, y, z+1)] : 0;
         uint16 nz = z-1 >= 0 ? chunk.blocks[get_index(x, y, z-1)] : 0;
 
-        if px==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 1, 0, 0));
-        if nx==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec(-1, 0, 0));
-        if py==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 1, 0));
-        if ny==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0,-1, 0));
-        if pz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0, 1));
-        if nz==0 add_quad(*chunk.mesh, block_id, make_vec(x,y,z), make_ivec( 0, 0,-1));
+        uint32 ss_width = texture_spritesheet.width;
+        uint32 ss_size = ss_width / 16;
+        vec2 uv_scale = make_vec2(16.0 / ss_width);
+        vec2 uv = make_vec(block_id % ss_size, block_id / ss_size) * uv_scale;
+
+        vec3 pos = {x,y,z};
+        if px==0 add_quad(*chunk.mesh, pos, make_ivec( 1, 0, 0), uv, uv_scale);
+        if nx==0 add_quad(*chunk.mesh, pos, make_ivec(-1, 0, 0), uv, uv_scale);
+        if py==0 add_quad(*chunk.mesh, pos, make_ivec( 0, 1, 0), uv, uv_scale);
+        if ny==0 add_quad(*chunk.mesh, pos, make_ivec( 0,-1, 0), uv, uv_scale);
+        if pz==0 add_quad(*chunk.mesh, pos, make_ivec( 0, 0, 1), uv, uv_scale);
+        if nz==0 add_quad(*chunk.mesh, pos, make_ivec( 0, 0,-1), uv, uv_scale);
     }
 
     // set_origin(chunk.mesh, vec3_one*7.5);
@@ -224,13 +307,27 @@ struct Voxel_Traversal_State {
 
 float32 travel_distance(Voxel_Traversal_State ts) return min(min(ts.max.x, ts.max.y), ts.max.z);
 
+// float32 replace_nan(float32 a, r) return is_nan(a) ? r : a;
+// vec3 replace_nan(vec3 a, float32 r) return { replace_nan(a.x, r), replace_nan(a.y, r), replace_nan(a.z, r) };
+
+
 Voxel_Traversal_State start_traversal(vec3 o, d) {
     Voxel_Traversal_State ts = {};
-    ts.coord = make_ivec(round(o));
 
-    ts.step = sign(d);
-    ts.delta = make_vec(ts.step) / d;
-    ts.max = (make_vec(ts.coord) + make_vec(ts.step)*0.5 - o) / d;
+    // ts.step = sign(d);
+    ts.step = {
+        d.x < 0 ? -1 : 1,
+        d.y < 0 ? -1 : 1,
+        d.z < 0 ? -1 : 1
+    };
+
+    vec3 s = make_vec(ts.step);
+    vec3 p = round(o);
+    ts.coord = make_ivec(p);
+
+    ts.delta = s / d;
+    ts.max = (p + s*0.5 - o) / d;
+    // ts.max = (p - o)/d + 0.5 * ts.delta;
 
     ts.index = 0;
     return ts;
