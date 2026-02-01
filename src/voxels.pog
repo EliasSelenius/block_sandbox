@@ -305,7 +305,12 @@ struct Voxel_Traversal_State {
     uint32 index;
 }
 
-float32 travel_distance(Voxel_Traversal_State ts) return min(min(ts.max.x, ts.max.y), ts.max.z);
+vec2 travel_distance(Voxel_Traversal_State ts) {
+    let m = ts.max;
+    let d = m - ts.delta;
+
+    return { max_axis(d), min_axis(m) };
+}
 
 // float32 replace_nan(float32 a, r) return is_nan(a) ? r : a;
 // vec3 replace_nan(vec3 a, float32 r) return { replace_nan(a.x, r), replace_nan(a.y, r), replace_nan(a.z, r) };

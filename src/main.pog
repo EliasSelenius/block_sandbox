@@ -294,6 +294,10 @@ void main() {
             rl(*ui_shader);
         }
 
+        if key_pressed(Key.escape) {
+            void DebugBreak();
+            DebugBreak();
+        }
 
         float32 dt = 1.0/60.0; // deltatime();
 
@@ -376,7 +380,7 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
 
     while true {
         traverse(*ts);
-        float32 dist = travel_distance(ts);
+        float32 dist = travel_distance(ts).x;
         if dist > max_dist break;
 
         uint16 id = get_block(ts.coord);
