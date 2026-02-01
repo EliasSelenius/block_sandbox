@@ -85,7 +85,7 @@ BlockInfo[] block_infos = {
     {"Grass",   "grass.bmp",    tool = .Shovel,   drop = ItemIds.Grass },
     {"Gravel",  "gravel.bmp",   tool = .Shovel,   drop = ItemIds.Flint_Rock },
     {"Log",     "log.bmp",      tool = .Axe,      drop = ItemIds.Log },
-    {"Leaves",  "leaves.bmp",   tool = .Any,     drop = ItemIds.Stick }
+    {"Leaves",  "leaves.bmp",   tool = .Any,      drop = ItemIds.Stick }
 };
 
 enum BlockIds {
@@ -276,6 +276,8 @@ void main() {
         chunk.coord = {99999,99999,99999};
     }
 
+    init_hotbar(*player_hotbar);
+
     while grax_loop() {
         ensure_chunks();
 
@@ -454,7 +456,9 @@ void player_control(float32 dt) {
     if key_pressed(key_open_inventory) {
         if player_backpack_open {
             player_backpack_open = false;
+            init_hotbar(*player_hotbar);
         } else {
+            player_backpack_open = true;
             open_inventory(*player_hotbar, *player_backpack, null);
         }
     }
@@ -472,13 +476,10 @@ void player_control(float32 dt) {
         enable_cursor(); else disable_cursor();
 
 
-    if !player_backpack_open  hotbar_selected_slot = (9 + hotbar_selected_slot as int32 - Input.mouse_scroll as int32) as uint32 % 9;
-    Item* item_hand = player_held_item();
-
     if player_backpack_open {
         draw_inventory();
     } else {
-        draw_hotbar(*player_hotbar, hotbar_selected_slot);
+        draw_hotbar();
         draw_text(vec2_zero, 0.05, "X", White);
 
         if is_thirdperson {
@@ -490,6 +491,7 @@ void player_control(float32 dt) {
 
         player_move_input(*player, world_cam, dt);
 
+        Item* item_hand = player_held_item();
         if is_item(@item_hand) {
             if key_pressed(key_drop_item) {
                 vec3 look_dir = forward(world_cam.transform); // forward(player.tr);

@@ -50,6 +50,11 @@ struct Entity {
     bool is_grounded;
 }
 
+struct Particle_Cube {
+    Box aabb;
+    vec3 vel;
+}
+
 struct World {
     Entity[..] entity_pool;
 }
@@ -110,7 +115,7 @@ Entity* spawn_block_entity(vec3 pos, vel, uint16 block_id) {
     return en;
 }
 
-struct BlockInter {
+struct BoxInter {
     vec3 normal;
     float32 depth;
 }
@@ -129,8 +134,12 @@ Box box_overlap(vec3 p1, s1, p2, s2) {
     return { (min3 + max3) * 0.5, max3 - min3 };
 }
 
-BlockInter box_inter(Box b1, b2) {
-    let o = box_overlap(b1.center, b1.size, b2.center, b2.size);
+Box box_overlap(Box a, b) {
+    return box_overlap(a.center, a.size, b.center, b.size);
+}
+
+BoxInter box_inter(Box b1, b2) {
+    let o = box_overlap(b1, b2);
     let s = o.size;
     let r = b1.center - b2.center;
     if s.x < s.y and s.x < s.z {
@@ -142,52 +151,55 @@ BlockInter box_inter(Box b1, b2) {
     }
 }
 
-void collide_aabb(Entity* en) {
+Box effective_aabb(Entity* en) {
+    Box box = en.aabb;
+    box.center = box.center + en.tr.position;
+    box.size = box.size * en.tr.scale;
+    return box;
+}
 
-    let size = en.aabb.size;
-    let pos = en.tr.position + en.aabb.center;
+struct Grid_Inter {
+    BoxInter box_inter;
+    vec3 move;
+    bool is_grounded;
+}
 
-    let half_size = size * 0.5;
-    let mi = make_ivec(round(pos - half_size));
-    let mx = make_ivec(round(pos + half_size));
+Grid_Inter grid_aabb_collision_check(Box box) {
+
+    let half_size = box.size * 0.5;
+    let mi = make_ivec(round(box.center - half_size));
+    let mx = make_ivec(round(box.center + half_size));
 
     vec3 move = {};
+    BoxInter deepest_inter = {};
+    bool is_grounded = false;
 
-    BlockInter deepest_inter = {};
+    for(z: mi.z .. mx.z+1) for(y: mi.y .. mx.y+1) for(x: mi.x .. mx.x+1) {
+        let id = get_block(make_ivec(x, y, z));
+        if id == 0 continue;
 
-    en.is_grounded = false;
-    for z: mi.z .. mx.z+1 {
-        for y: mi.y .. mx.y+1 {
-            for x: mi.x .. mx.x+1 {
-                let id = get_block(make_ivec(x, y, z));
-                if id == 0 continue;
+        vec3 block_pos = make_vec(x,y,z);
+        Box box_block = {block_pos, vec3_one};
 
-                vec3 block_pos = make_vec(x,y,z);
+        if false {
+            gizmo_box(block_pos, vec3_one, Green);
 
-                if false {
-                    gizmo_box(block_pos, vec3_one, Green);
-
-                    let box = box_overlap(pos, size, block_pos, vec3_one);
-                    gizmo_box(box.center, box.size, Blue);
-                }
-
-                let inter = box_inter({pos,size} as Box, {block_pos,vec3_one} as Box);
-                let disp = inter.normal*inter.depth;
-                if abs(disp.x) > abs(move.x) move.x = disp.x;
-                if abs(disp.y) > abs(move.y) move.y = disp.y;
-                if abs(disp.z) > abs(move.z) move.z = disp.z;
-
-                if deepest_inter.depth < inter.depth  deepest_inter = inter;
-
-                if inter.normal.y > 0  en.is_grounded = true;
-            }
+            let overlap = box_overlap(box, box_block);
+            gizmo_box(overlap.center, overlap.size, Blue);
         }
+
+        let inter = box_inter(box, box_block);
+        let disp = inter.normal*inter.depth;
+        if abs(disp.x) > abs(move.x) move.x = disp.x;
+        if abs(disp.y) > abs(move.y) move.y = disp.y;
+        if abs(disp.z) > abs(move.z) move.z = disp.z;
+
+        if deepest_inter.depth < inter.depth  deepest_inter = inter;
+
+        if inter.normal.y > 0  is_grounded = true;
     }
 
-    float32 mass = en.mass;
-    float32 e = en.bounciness;
-    en.vel = calc_new_vel(en.vel, deepest_inter.normal, mass, e, en.cof_s, en.cof_k);
-    en.tr.position = en.tr.position + move;
+    return {deepest_inter, move, is_grounded};
 }
 
 float32 jump_height = 1.2;
@@ -208,19 +220,42 @@ void entity_update(Entity* en, float32 dt) {
 
     if en.cooldown > 0.0   en.cooldown -= dt;
 
-    collide_aabb(en);
+    Box en_world_aabb = effective_aabb(en);
+    let grid_inter = grid_aabb_collision_check(en_world_aabb);
+    en.is_grounded = grid_inter.is_grounded;
+
+    float32 e = en.bounciness;
+    en.vel = calc_new_vel(en.vel, grid_inter.box_inter.normal, en.mass, e, en.cof_s, en.cof_k);
+    en.tr.position = en.tr.position + grid_inter.move;
+
+    bool despawn = false;
 
     switch (en.kind) {
     case .Item: {
         rotate(*en.tr, vec3_unit_y, Pi*dt);
 
-        if sqdist(player.tr.position, en.tr.position) < sq(1.5) and en.cooldown <= 0.0 {
-            look_at(*en.tr, player.tr.position);
+        if en.cooldown <= 0.0 {
+            let player_aabb = effective_aabb(*player);
+            // let player_feet_pos = player.tr.position + player.aabb.center - {0, player.aabb.size.y/2.0, 0};
 
-            if player_recive_item(en.item_stack) {
-                list_remove(world.entity_pool, en);
+            let diff = player_aabb.center - en.tr.position;
+            let sqd = sqlength(diff);
+
+            let box = box_overlap(player_aabb, en_world_aabb);
+            if box.size.x > 0 and box.size.y > 0 and box.size.z > 0 {
+                if player_recive_item(en.item_stack) {
+                    despawn = true;
+                }
+            } else {
+                if sqd < sq(2) {
+                    // look_at(*en.tr, player.tr.position);
+                    static float32 item_pickup_acceleration = 100;
+                    en.vel = en.vel + {0,-g, 0}*dt + noz(diff)*item_pickup_acceleration*dt;
+                }
             }
+
         }
+
     } break;
 
     case .Player: {
@@ -229,11 +264,46 @@ void entity_update(Entity* en, float32 dt) {
 
     case .Block: {
         BlockInfo info = block_infos[en.block_id];
+
+        vec3 o = round(en.tr.position);
+        vec3 diff = en.tr.position - o;
+        if sqlength(diff) < sq(0.25) and sqlength(en.vel) < sq(0.1) {
+            set_block(make_ivec(o), en.block_id);
+            despawn = true;
+        }
     } break;
+    }
+
+    if despawn {
+        list_remove(world.entity_pool, en);
     }
 }
 
 void world_update(World* w, float32 dt) {
+
+
+    let ens_len = list_length(w.entity_pool);
+    for i: 0 .. ens_len {
+        let eni = *w.entity_pool[i];
+
+        if eni.kind == .Player
+        or eni.kind == .Block;
+        else continue;
+
+        for j: i+1 .. ens_len {
+            let enj = *w.entity_pool[i];
+
+            if enj.kind == .Player
+            or enj.kind == .Block;
+            else continue;
+
+            let box = box_overlap(effective_aabb(eni), effective_aabb(enj));
+            if box.size.x > 0 and box.size.y > 0 and box.size.z > 0 {
+
+            }
+        }
+    }
+
     for 0 .. list_length(w.entity_pool) {
         let en = *w.entity_pool[it];
         entity_update(en, dt);
@@ -503,6 +573,8 @@ struct UI_Slot {
     Item* item;
     UI_Rect rect;
     vec2 pos, vel;
+    uint32 last_item_count;
+    float32 item_count_t;
     float32 hover_t;
 }
 
@@ -533,9 +605,13 @@ struct UI_Inventory_State {
 }
 
 UI_Inventory_State ui_inventory_state;
-void open_inventory(Inventory* hotbar, backpack, chest) {
-    player_backpack_open = true;
 
+float32 ui_item_scale        = 0.7;
+float32 ui_item_scale_hover  = 0.8;
+float32 ui_item_scale_select = 1.1;
+
+
+void open_inventory(Inventory* hotbar, backpack, chest) {
     let state = *ui_inventory_state;
 
     state.select_slot.item = *state.select_item;
@@ -584,6 +660,7 @@ void prepare_elements(UI_Rect rect, UI_Slots* slots, Inventory* inv) {
         UI_Slot slot = {};
         slot.rect = slot_rect;
         slot.item = *inv.items[index];
+        slot.last_item_count = slot.item.count;
 
         slots.elements[index] = slot;
         index++;
@@ -596,18 +673,28 @@ void stack_item(UI_Slot* dst, src) {
         src.item.count = 0;
         src.item.id = 0;
     } else {
-        Item temp = @dst.item;
-        @dst.item = @src.item;
-        @src.item = temp;
+        // Item temp = @dst.item;
+        // @dst.item = @src.item;
+        // @src.item = temp;
+
+        swap(sizeof Item, dst.item, src.item);
     }
 
     swap(*dst.pos, *src.pos);
+    swap(sizeof uint32, *dst.last_item_count, *src.last_item_count);
 }
 
 void swap(vec2* a, b) {
     vec2 t = @a;
     @a = @b;
     @b = t;
+}
+
+void swap(uint32 size, void* a, b) {
+    uint8[size] temp;
+    memcpy(temp, a, size);
+    memcpy(a, b, size);
+    memcpy(b, temp, size);
 }
 
 void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
@@ -618,6 +705,11 @@ void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
         UI_Slot* slot = *slots.elements[it];
         draw_slot(state, slot, true, next, dt);
     }
+}
+
+UI_Rect slot_item_rect(UI_Slot* slot) {
+    float32 item_scale = lerp(slot.hover_t, ui_item_scale, ui_item_scale_hover);
+    return {slot.pos, slot.rect.size * item_scale};
 }
 
 void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float32 dt) {
@@ -633,17 +725,99 @@ void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots
         draw_rect(pad(slot.rect, padding), color);
     }
 
-    float32 item_scale = lerp(slot.hover_t, 1, 1.2);
-    UI_Rect item_rect = {slot.pos, slot.rect.size * item_scale};
-    draw_item(item_rect, @slot.item);
+
+    if slot.item_count_t < 0.001 {
+        if slot.last_item_count != slot.item.count {
+            // slot.pos.y += slot.rect.size.y;
+            slot.item_count_t = 1.0;
+        }
+    }
+
+    UI_Rect item_rect = slot_item_rect(slot);
+    draw_item(item_rect, @slot.item, slot.last_item_count, slot.item_count_t);
 
     update_slot(slot, slot.rect.center, dt);
 
     slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 5, dt));
+    // slot.item_count_t = clamp01(exp_decay(slot.item_count_t, 0, 5, dt));
+
+    slot.item_count_t = clamp01(slot.item_count_t - 10.0*dt);
+    if slot.item_count_t < 0.001 {
+        slot.last_item_count = slot.item.count;
+    }
+}
+
+void update_slot(UI_Slot* slot, vec2 target_pos, float32 dt) {
+    slot.pos = slot.pos + slot.vel * dt;
+
+    // These were made static so that I could access them in the debugger
+    static float32 P = 450;
+    static float32 Td = 0.04;
+
+    vec2 acc = P*(target_pos - slot.pos) - P*Td*slot.vel;
+    slot.vel = slot.vel + acc * dt;
+}
+
+void draw_item(UI_Rect rect, Item item) draw_item(rect, item, 0, 0.0);
+void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t) {
+    if item.id == 0 return;
+
+    ItemInfo info = item_infos[item.id];
+    float32 scale = rect.size.x;
+
+    float32 sprite_pixel_size = get_sprite_pixel_size(info.sprite).x;
+    Transform2D tr = { pos = rect.center, scale = scale / sprite_pixel_size };
+    vec4 color_factor = vec4_one;
+    vec4 color_additive = vec4_zero;
+    vec4 color_outline = vec4_zero;
+    draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
+
+    if item.count > 1 {
+
+        Color color_count = White;
+
+        string text = to_string(item.count);
+        string last = to_string(last_count);
+
+
+        float32 glyph_height = scale/2.0;
+        UI_Rect txt_rect = {};
+        txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
+        txt_rect = bottom_right(txt_rect, rect);
+
+        UI_Rect rect_last = translate(txt_rect, 0, lerp(count_t, -glyph_height, 0));
+        UI_Rect rect_text = translate(txt_rect, 0, lerp(count_t, 0, glyph_height));
+
+        draw_text(*static_ui_foreground, center_text(rect_text, glyph_height, text), glyph_height, text, opacity(color_count, 1.0 - count_t));
+        draw_text(*static_ui_foreground, center_text(rect_last, glyph_height, last), glyph_height, last, opacity(color_count, count_t));
+    }
+}
+
+void draw_item_tooltip(vec2 pos, Item item, float32 time) {
+    float32 transition_time = 0.2;
+    float32 t = clamp01(time / transition_time);
+
+    float32 opa = lerp(t, 0.0, 1.0);
+    float32 y =  lerp(t, -2, -1);
+
+    Color color_bg = opacity(Black, opa*0.7);
+    Color color_txt = opacity(White, opa);
+
+    ItemInfo item_info = item_infos[item.id];
+    string str = make_string(item_info.name);
+    float32 glyph_height = 0.07;
+
+    UI_Rect rect = {};
+    rect.size = text_size(str, glyph_height);
+    rect = place(rect, -1, y, pos);
+
+    draw_rect(*static_ui_foreground, rect, color_bg);
+
+    vec2 txt_pos = center_text(rect, glyph_height, str);
+    draw_text(*static_ui_foreground, txt_pos, glyph_height, str, color_txt);
 }
 
 void draw_inventory() {
-    float32 px = 2.0 / app.window_height;
     float32 dt = deltatime();
     let state = *ui_inventory_state;
     float32 slot_size = 1.2 / 9;
@@ -653,47 +827,7 @@ void draw_inventory() {
     draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
     draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
 
-    { // crafting
-        UI_Rect craft_rect = state.crafting.rect;
-        draw_rect(craft_rect, opacity(Black, 0.6));
-        for 0 .. list_length(state.crafting.slots) {
-            UI_Slot* slot = *state.crafting.slots[it];
-            draw_slot(state, slot, true, *state.slots_backpack, dt);
-        }
-
-        for 0 .. recipes.length {
-            Recipe rec = recipes[it];
-            UI_Rect rect_rec = child(craft_rect, 0,1, craft_rect.size.x, slot_size);
-            rect_rec.center.y -= it * (slot_size + 4*px);
-            UI_Rect rect_output = child(rect_rec, 1,0, slot_size, slot_size);
-
-            Color color_bg = Black;
-
-            if is_item(state.select_item) == false {
-                if hover(rect_rec, Input.mouse_pos) {
-                    color_bg = White;
-                    if mouse_pressed(MouseButton.Left) {
-                        if player_craft(rec) {
-                            state.select_item = rec.output;
-                            state.select_slot.pos = rect_output.center;
-                        } else {
-                            color_bg = Red;
-                        }
-                    }
-                }
-            }
-
-            draw_rect(rect_rec, opacity(color_bg, 0.6));
-            draw_item(rect_output, rec.output);
-
-            for 0 .. rec.input.length {
-                Item ing = rec.input[it];
-                UI_Rect rect_ing = translate(child(rect_rec, -1,0, slot_size, slot_size), (slot_size+4*px)*it, 0);
-                draw_item(rect_ing, ing);
-            }
-        }
-    }
-
+    draw_crafting_menu(state, slot_size, dt);
 
     if state.hover_slot {
         UI_Slot* hover = state.hover_slot;
@@ -724,7 +858,8 @@ void draw_inventory() {
 
         if !select.item.id {
             if prev_hover_slot != hover   state.item_tooltip_time = 0.0;
-            draw_item_tooltip(Input.mouse_pos, @hover.item, state.item_tooltip_time);
+            vec2 tooltip_pos = point(hover.rect, -1, 1);
+            draw_item_tooltip(tooltip_pos, @hover.item, state.item_tooltip_time);
             state.item_tooltip_time += dt;
         }
     }
@@ -733,7 +868,7 @@ void draw_inventory() {
         UI_Slot* slot = *state.select_slot;
 
         float32 item_scale = 1.5;
-        UI_Rect item_rect = {slot.pos, make_vec2(0.133) * item_scale};
+        UI_Rect item_rect = {slot.pos, vec2_one*slot_size*ui_item_scale_select};
         draw_item(item_rect, state.select_item);
 
         // slot.pos = exp_decay(slot.pos, Input.mouse_pos, 10, dt);
@@ -742,90 +877,108 @@ void draw_inventory() {
     }
 }
 
-void update_slot(UI_Slot* slot, vec2 target_pos, float32 dt) {
-    slot.pos = slot.pos + slot.vel * dt;
-
-    // These were made static so that I could access them in the debugger
-    static float32 P = 450;
-    static float32 Td = 0.04;
-
-    vec2 acc = P*(target_pos - slot.pos) - P*Td*slot.vel;
-    slot.vel = slot.vel + acc * dt;
-}
-
-void draw_item(UI_Rect rect, Item item) {
-    if item.id == 0 return;
-
-    ItemInfo info = item_infos[item.id];
-    float32 width = rect.size.x;
-
-    float32 sprite_pixel_size = get_sprite_pixel_size(info.sprite).x;
-    float32 sprite_scale = width/2.0;
-    Transform2D tr = { pos = rect.center, scale = sprite_scale / sprite_pixel_size };
-    vec4 color_factor = vec4_one;
-    vec4 color_additive = vec4_zero;
-    vec4 color_outline = vec4_zero;
-    draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
-
-    string text = to_string(item.count);
-
-    float32 glyph_height = width/2.0;
-    UI_Rect txt_rect = {};
-    txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
-    txt_rect = bottom_right(txt_rect, rect);
-
-    draw_text(*static_ui_foreground, center_text(txt_rect, glyph_height, text), glyph_height, text, White);
-}
-
-void draw_item_tooltip(vec2 pos, Item item, float32 time) {
-    float32 transition_time = 0.2;
-    float32 t = clamp01(time / transition_time);
-
-    float32 opa = lerp(t, 0.0, 1.0);
-    float32 y =  lerp(t, -2, -1);
-
-    Color color_bg = opacity(Black, opa*0.7);
-    Color color_txt = opacity(White, opa);
-
-    ItemInfo item_info = item_infos[item.id];
-    string str = make_string(item_info.name);
-    float32 glyph_height = 0.07;
-
-    UI_Rect rect = {};
-    rect.size = text_size(str, glyph_height);
-    rect = place(rect, -1, y, pos);
-
-    draw_rect(*static_ui_foreground, rect, color_bg);
-
-    vec2 txt_pos = center_text(rect, glyph_height, str);
-    draw_text(*static_ui_foreground, txt_pos, glyph_height, str, color_txt);
-}
-
-void draw_hotbar(Inventory* hotbar, uint32 index) {
+void init_hotbar(Inventory* hotbar) {
     const hotbar_width = 1.2;
-    float32 width = hotbar_width / hotbar.cols;
+    float32 slot_size = hotbar_width / hotbar.cols;
 
     float32 px = 2.0 / app.window_height;
-    float32 bottom_padding = width/6.0;
+    float32 bottom_padding = slot_size/6.0;
 
-    Color color = opacity(Black, 0.7);
-
+    // UI_Rect rect_window = rect_pp(app.bottom_left, app.top_right);
     UI_Rect hotbar_rect = {};
-    hotbar_rect.size = {hotbar_width, width};
-    hotbar_rect.center = {0, -1 + width/2.0 + bottom_padding};
+    hotbar_rect.size = {hotbar_width, slot_size};
+    hotbar_rect.center = {0, -1 + slot_size/2.0 + bottom_padding};
 
-    for 0 .. hotbar.cols {
-        UI_Rect rect = div_x(hotbar_rect, hotbar.cols, it);
-
-        draw_rect(pad(rect, 4*px), color);
-
-        Item item = hotbar.items[it];
-        draw_item(rect, item);
-
-        if it == index {
-            Color selection_highlight_color = opacity(Gray, 0.6);
-            draw_rect(pad_top(rect, width*(7/8.0)), selection_highlight_color);
-        }
-    }
+    let state = *ui_inventory_state;
+    prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
 }
 
+void draw_hotbar() {
+    let state = *ui_inventory_state;
+
+    uint32 prev_index = hotbar_selected_slot;
+    hotbar_selected_slot = (9 + prev_index as int32 - Input.mouse_scroll as int32) as uint32 % 9;
+
+    UI_Slots* slots = *state.slots_hotbar;
+    UI_Slot*  slot = *slots.elements[hotbar_selected_slot];
+
+    slot.hover_t = 1.0;
+
+    if prev_index != hotbar_selected_slot {
+        static float32 rand_item_offset_scale = 0.2;
+        slot.pos = slot.pos + random_unit_vec2() * slot.rect.size.y * rand_item_offset_scale;
+    }
+
+    draw_slots(state, slots, null);
+
+
+    // for 0 .. hotbar.cols {
+    //     UI_Rect rect = div_x(hotbar_rect, hotbar.cols, it);
+
+    //     draw_rect(pad(rect, 4*px), color);
+
+    //     Item item = hotbar.items[it];
+    //     UI_Rect item_rect = slot_item_rect(slot);
+    //     draw_item(item_rect, item);
+
+    //     if it == index {
+    //         Color selection_highlight_color = opacity(Gray, 0.6);
+    //         draw_rect(pad_top(rect, width*(7/8.0)), selection_highlight_color);
+    //     }
+    // }
+}
+
+void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
+    float32 px = 2.0 / app.window_height;
+
+    UI_Rect rect_menu = state.crafting.rect;
+
+    UI_Rect rect_recipes = div_x(rect_menu, 2, 0);
+    UI_Rect rect_recipe  = div_x(rect_menu, 2, 1);
+
+    draw_rect(rect_menu, opacity(Black, 0.6));
+
+
+    float32 p = 4*px;
+    draw_rect(pad(rect_recipes, p), opacity(Black, 0.6));
+    draw_rect(pad(rect_recipe , p), opacity(Black, 0.6));
+
+
+
+    // for 0 .. list_length(state.crafting.slots) {
+    //     UI_Slot* slot = *state.crafting.slots[it];
+    //     draw_slot(state, slot, true, *state.slots_backpack, dt);
+    // }
+
+    // for 0 .. recipes.length {
+    //     Recipe rec = recipes[it];
+    //     UI_Rect rect_rec = child(rect_menu, 0,1, rect_menu.size.x, slot_size);
+    //     rect_rec.center.y -= it * (slot_size + 4*px);
+    //     UI_Rect rect_output = child(rect_rec, 1,0, slot_size, slot_size);
+
+    //     Color color_bg = Black;
+
+    //     if is_item(state.select_item) == false {
+    //         if hover(rect_rec, Input.mouse_pos) {
+    //             color_bg = White;
+    //             if mouse_pressed(MouseButton.Left) {
+    //                 if player_craft(rec) {
+    //                     state.select_item = rec.output;
+    //                     state.select_slot.pos = rect_output.center;
+    //                 } else {
+    //                     color_bg = Red;
+    //                 }
+    //             }
+    //         }
+    //     }
+
+    //     draw_rect(rect_rec, opacity(color_bg, 0.6));
+    //     draw_item(rect_output, rec.output);
+
+    //     for 0 .. rec.input.length {
+    //         Item ing = rec.input[it];
+    //         UI_Rect rect_ing = translate(child(rect_rec, -1,0, slot_size, slot_size), (slot_size+4*px)*it, 0);
+    //         draw_item(rect_ing, ing);
+    //     }
+    // }
+}
