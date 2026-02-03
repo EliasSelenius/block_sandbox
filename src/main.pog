@@ -53,6 +53,7 @@ Texture2D texture_spritesheet;
 
 DrawBuffers db_quad3D;
 DrawBuffers db_cube;
+// DrawBuffers db_
 
 bool is_freecam = true;
 bool is_thirdperson = false;
@@ -314,7 +315,7 @@ void main() {
 
         glDepthMask(true);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        draw_world(R, world_cam);
+        draw_frame(R, world_cam);
         gizmo_dispatch();
         dispatch_layer(*static_ui, {scale=1} as Transform2D);
         dispatch_sprites({scale=1} as Transform2D);
@@ -534,7 +535,6 @@ void item_action(Item* item, float32 dt) {
     let d = camera_ray(world_cam, cursor_pos);
 
 
-    // TODO: we seem to have further reach with entity_raycast than grid_raycast so one of them must have a bug! related to distance calc
     float32 reach = 5;
     let target_block = grid_raycast(o,d, reach);
     let target_entity = entity_raycast(*world, o,d, reach);
@@ -562,7 +562,31 @@ void item_action(Item* item, float32 dt) {
 
     if is_entity {
         Entity* en = target_entity.en;
-        gizmo_point(target_entity.hit_point, Red, 0.05);
+
+        bool can_hold = item.id == 0;
+        bool holding = can_hold and mouse_down(mouse_primary_action);
+
+        if player_holding_entity {
+            if holding {
+
+                en.tr.position = o + d*player_held_entity_distance - player_held_entity_offset;
+                en.vel.y += 9.8*dt;
+
+            } else {
+                player_holding_entity = false;
+            }
+        } else {
+            if holding {
+                player_holding_entity = true;
+                player_held_entity_offset = target_entity.hit_point - en.tr.position;
+                player_held_entity_distance = target_entity.min_dist;
+            }
+        }
+
+        Color color_hit_point = Blue;
+        if holding  color_hit_point = Red;
+        if can_hold gizmo_point(target_entity.hit_point, color_hit_point, 0.05);
+
 
         Color color_bb = White;
 
@@ -572,7 +596,8 @@ void item_action(Item* item, float32 dt) {
             color_bb = Red;
         }
 
-        gizmo_box(en.tr.position + en.aabb.center, en.aabb.size, color_bb);
+        let ef_aabb = effective_aabb(en);
+        gizmo_box(ef_aabb.center, ef_aabb.size, color_bb);
 
     } else if is_block {
         BlockInfo block_info = block_infos[target_block.block_id];
@@ -597,12 +622,23 @@ void item_action(Item* item, float32 dt) {
                 set_block(target_block.prev_coord, item_info.block_id);
                 item_count(item, -1);
             }
+        } else {
+            if mouse_pressed(mouse_primary_action) {
+                let block_en = make_block_entity(target_block.coord);
+                block_en.tr.position.y += 0.3;
+
+                vec3 block_hit_point = o + d*target_block.dist;
+
+                player_holding_entity = true;
+                player_held_entity_offset = block_hit_point - block_en.tr.position;
+                player_held_entity_distance = target_block.dist;
+            }
         }
     }
 
 }
 
-void draw_world(DeferredRenderer* R, Camera cam) {
+void draw_frame(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
     R.sun_dir = { cos(time), 0.7, sin(time) };
     // R.sun_dir = noz(forward(cam.transform));

@@ -14,8 +14,11 @@ uint32 hotbar_selected_slot = 0;
 bool player_backpack_open = false;
 
 float32 player_swing_anim_time = 0;
-
 float32 player_tool_charge = 0;
+
+bool player_holding_entity = false;
+vec3 player_held_entity_offset;
+float32 player_held_entity_distance;
 
 Item* player_held_item() return *player_hotbar.items[hotbar_selected_slot];
 
@@ -113,6 +116,13 @@ Entity* spawn_block_entity(vec3 pos, vel, uint16 block_id) {
     en.cof_k = 0.5;
     en.cof_s = 1.2 * en.cof_k;
     return en;
+}
+
+Entity* make_block_entity(ivec3 coord) {
+    let block_id = get_block(coord);
+    if block_id == 0 return null;
+    set_block(coord, 0);
+    return spawn_block_entity(make_vec(coord), vec3_zero, block_id);
 }
 
 struct BoxInter {
@@ -267,8 +277,11 @@ void entity_update(Entity* en, float32 dt) {
 
         vec3 o = round(en.tr.position);
         vec3 diff = en.tr.position - o;
-        if sqlength(diff) < sq(0.25) and sqlength(en.vel) < sq(0.1) {
-            set_block(make_ivec(o), en.block_id);
+        ivec3 block_coord = make_ivec(o);
+        let block_below = get_block(block_coord + {0,-1,0})
+
+        if sqlength(diff) < sq(0.25) and sqlength(en.vel) < sq(0.1) and block_below != 0 {
+            set_block(block_coord, en.block_id);
             despawn = true;
         }
     } break;
@@ -396,6 +409,22 @@ void draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
     draw_elements(db_cube);
 }
 
+void draw_shadow(vec3 pos, float32 scale) {
+    vec3 shadow_pos = pos;
+    shadow_pos.y = round(pos.y) - 0.499;
+
+    let floor_coord = block_coord(pos) + {0,-1,0};
+    if get_block(floor_coord) {
+        float32 albedo_scale = 0.02;
+        Material_PBR pbr = { metallic = 0, roughness = 0, albedo = make_vec3(albedo_scale) };
+
+        float32 shadow_scale = 1.0 - scale * (pos.y - shadow_pos.y);
+
+        draw_quad(make_sprite(white_texture), pbr, make_mat4(shadow_pos, make_vec3(shadow_scale), axis_angle(vec3_unit_x, Half_Pi)));
+    }
+}
+
+
 /* TODO: thinking about how I want to add physics to items held in hand
 struct Physics {
     vec3 pos, ang, vel, ang_vel;
@@ -448,6 +477,7 @@ void world_draw(DeferredRenderer* R, World* w) {
         switch (en.kind) {
         case .Item: {
             ItemInfo info = item_infos[en.item_stack.id];
+            draw_shadow(en.tr.position, (en.tr.scale * en.aabb.size).x);
 
             if info.block_id   draw_cube(info.sprite, mat, model);
             else               draw_quad(info.sprite, mat, model);
@@ -584,15 +614,15 @@ struct UI_Slots {
     uint32 elements_count;
 }
 
-struct UI_Crafting {
-    UI_Rect rect;
-    UI_Slot[..] slots;
-}
-
 struct UI_Inventory_State {
     UI_Slots slots_hotbar;
     UI_Slots slots_backpack;
     UI_Slots slots_chest;
+
+    UI_Rect rect_hotbar;
+    UI_Rect rect_backpack;
+    UI_Rect rect_crafting;
+    UI_Rect rect_menu;
 
     UI_Slots* slots_to_swap_to;
     UI_Slot* hover_slot;
@@ -601,7 +631,8 @@ struct UI_Inventory_State {
 
     float32 item_tooltip_time;
 
-    UI_Crafting crafting;
+    float32 time_recipe;
+    int32 selected_recipe_index;
 }
 
 UI_Inventory_State ui_inventory_state;
@@ -632,16 +663,25 @@ void open_inventory(Inventory* hotbar, backpack, chest) {
     backpack_rect.center = hotbar_rect.center + {0, (backpack_rect.size.y + hotbar_rect.size.y)/2.0 + padding};
 
     UI_Rect crafting_rect = {};
-    crafting_rect.size = { backpack.cols, 4 } * slot_size;
-    crafting_rect.center = {0, backpack_rect.center.y + (backpack_rect.size.y + crafting_rect.size.y)/2.0 + padding};
-    state.crafting.rect = crafting_rect;
+    crafting_rect.size = {1,1}*slot_size;
+    crafting_rect.center = backpack_rect.center + {(backpack_rect.size.x + crafting_rect.size.x)/2.0 + padding, 0};
 
-    if state.crafting.slots == null  state.crafting.slots = list_create(sizeof UI_Slot);
-    list_clear(state.crafting.slots);
+
+    UI_Rect stat_menu_rect = {};
+    stat_menu_rect.size = { backpack.cols, 4 } * slot_size;
+    stat_menu_rect.center = {0, backpack_rect.center.y + (backpack_rect.size.y + stat_menu_rect.size.y)/2.0 + padding};
+
+
 
     prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
     prepare_elements(backpack_rect, *state.slots_backpack, backpack);
     // prepare_elements(*slots_chest, chest);
+
+    state.rect_hotbar = hotbar_rect;
+    state.rect_backpack = backpack_rect;
+    state.rect_crafting = crafting_rect;
+    state.rect_menu = stat_menu_rect;
+
 }
 
 void prepare_elements(UI_Rect rect, UI_Slots* slots, Inventory* inv) {
@@ -712,19 +752,48 @@ UI_Rect slot_item_rect(UI_Slot* slot) {
     return {slot.pos, slot.rect.size * item_scale};
 }
 
+UI_Rect slot_item_rect(UI_Rect slot_rect, float32 hover_t) {
+    float32 item_scale = lerp(hover_t, ui_item_scale, ui_item_scale_hover);
+    return scale(slot_rect, item_scale);
+}
+
+
+void draw_border(UI_Rect rect, float32 border_thickness, Color color) {
+    UI_Rect border = {};
+    border.size = {rect.size.x + border_thickness, border_thickness};
+    border.center = rect.center;
+    vec2 offset = { border_thickness, rect.size.y + border_thickness } / 2.0;
+    draw_rect(translate(border, offset), color);
+    draw_rect(translate(border, offset*-1), color);
+
+    border.size = {border.size.y, border.size.x};
+    offset = {offset.y, -offset.x};
+
+    draw_rect(translate(border, offset), color);
+    draw_rect(translate(border, offset*-1), color);
+
+}
+
+void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
+    Color color = lerp(hover_t, opacity(Black, opa*0.6), opacity(Gray, opa*0.8));
+    Color color_border = opacity(Black, opa*0.8);
+
+    float32 px = 2.0 / app.window_height;
+    float32 padding = 2*px;
+    float32 border = 2*px;
+
+    let rect_inner = pad(rect, padding + 2*border);
+    draw_rect(rect_inner, color);
+    draw_border(rect_inner, border, color_border);
+}
+
 void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float32 dt) {
     if hover(slot.rect, Input.mouse_pos) {
         state.hover_slot = slot;
         state.slots_to_swap_to = next;
     }
 
-    if draw_bkg {
-        float32 px = 2.0 / app.window_height;
-        float32 padding = 4*px;
-        Color color = lerp(slot.hover_t, opacity(Black, 0.6), opacity(Gray, 0.8));
-        draw_rect(pad(slot.rect, padding), color);
-    }
-
+    if draw_bkg  draw_slot_background(slot.rect, slot.hover_t, 1.0);
 
     if slot.item_count_t < 0.001 {
         if slot.last_item_count != slot.item.count {
@@ -822,16 +891,17 @@ void draw_inventory() {
     let state = *ui_inventory_state;
     float32 slot_size = 1.2 / 9;
 
-    let prev_hover_slot = state.hover_slot;
+    let prev_hover = state.hover_slot;
     state.hover_slot = null;
     draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
     draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
+    UI_Slot* hover = state.hover_slot;
+    UI_Slot* select = *state.select_slot;
+
 
     draw_crafting_menu(state, slot_size, dt);
 
-    if state.hover_slot {
-        UI_Slot* hover = state.hover_slot;
-        UI_Slot* select = *state.select_slot;
+    if hover {
         UI_Slot* dest = null;
         int32 dest_index = get_slot_index_for(state.slots_to_swap_to.inv, hover.item.id);
         if dest_index != -1   dest = *state.slots_to_swap_to.elements[dest_index];
@@ -857,23 +927,25 @@ void draw_inventory() {
 
 
         if !select.item.id {
-            if prev_hover_slot != hover   state.item_tooltip_time = 0.0;
+            if prev_hover != hover   state.item_tooltip_time = 0.0;
             vec2 tooltip_pos = point(hover.rect, -1, 1);
             draw_item_tooltip(tooltip_pos, @hover.item, state.item_tooltip_time);
             state.item_tooltip_time += dt;
         }
+
+        if hover != prev_hover {
+            hover.pos = hover.pos + random_unit_vec2() * hover.rect.size.y * 0.2;
+        }
     }
 
-    if state.select_item.id {
-        UI_Slot* slot = *state.select_slot;
-
+    if select.item.id {
         float32 item_scale = 1.5;
-        UI_Rect item_rect = {slot.pos, vec2_one*slot_size*ui_item_scale_select};
+        UI_Rect item_rect = {select.pos, vec2_one*slot_size*ui_item_scale_select};
         draw_item(item_rect, state.select_item);
 
-        // slot.pos = exp_decay(slot.pos, Input.mouse_pos, 10, dt);
+        // select.pos = exp_decay(select.pos, Input.mouse_pos, 10, dt);
 
-        update_slot(slot, Input.mouse_pos, dt);
+        update_slot(select, Input.mouse_pos, dt);
     }
 }
 
@@ -931,54 +1003,76 @@ void draw_hotbar() {
 void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
     float32 px = 2.0 / app.window_height;
 
-    UI_Rect rect_menu = state.crafting.rect;
-
-    UI_Rect rect_recipes = div_x(rect_menu, 2, 0);
-    UI_Rect rect_recipe  = div_x(rect_menu, 2, 1);
-
-    draw_rect(rect_menu, opacity(Black, 0.6));
+    draw_rect(state.rect_menu, opacity(Black, 0.6));
 
 
-    float32 p = 4*px;
-    draw_rect(pad(rect_recipes, p), opacity(Black, 0.6));
-    draw_rect(pad(rect_recipe , p), opacity(Black, 0.6));
+    UI_Rect rect_recipe = state.rect_crafting;
+    UI_Rect rect_all = rect_recipe;
+    rect_all.size.y *= 5;
+
+    int32 recipes_count = recipes.length as int32;
+    if hover(rect_all, Input.mouse_pos) {
+        int32 s = sign(Input.mouse_scroll);
+
+        int32 prev = state.selected_recipe_index;
+        state.selected_recipe_index = (recipes_count + state.selected_recipe_index + s) % recipes_count;
+
+        if state.selected_recipe_index != prev {
+            state.time_recipe = 1.0*s;
+        }
+    }
 
 
+    Recipe recipe_current = recipes[state.selected_recipe_index];
 
-    // for 0 .. list_length(state.crafting.slots) {
-    //     UI_Slot* slot = *state.crafting.slots[it];
-    //     draw_slot(state, slot, true, *state.slots_backpack, dt);
-    // }
+    int32 a = 3;
+    for int32 it: -a .. a+1 {
+        float32 offset = lerp(state.time_recipe, 0, rect_recipe.size.y);
+        float32 y_trans = rect_recipe.size.y*it + offset;
+        UI_Rect rect = translate(rect_recipe, 0, y_trans);
 
-    // for 0 .. recipes.length {
-    //     Recipe rec = recipes[it];
-    //     UI_Rect rect_rec = child(rect_menu, 0,1, rect_menu.size.x, slot_size);
-    //     rect_rec.center.y -= it * (slot_size + 4*px);
-    //     UI_Rect rect_output = child(rect_rec, 1,0, slot_size, slot_size);
+        float32 alpha = 1.0 - abs(y_trans) / (rect_recipe.size.y*a);
+        // float32 alpha = 1.0 - abs((it as float32) / a);
 
-    //     Color color_bg = Black;
+        int32 recipe_index = (recipes_count + state.selected_recipe_index + it) % recipes_count;
+        Recipe recipe = recipes[recipe_index];
 
-    //     if is_item(state.select_item) == false {
-    //         if hover(rect_rec, Input.mouse_pos) {
-    //             color_bg = White;
-    //             if mouse_pressed(MouseButton.Left) {
-    //                 if player_craft(rec) {
-    //                     state.select_item = rec.output;
-    //                     state.select_slot.pos = rect_output.center;
-    //                 } else {
-    //                     color_bg = Red;
-    //                 }
-    //             }
-    //         }
-    //     }
+        draw_slot_background(rect, 0.0, alpha);
+        UI_Rect rect_item = slot_item_rect(rect, 0.0);
+        draw_item(rect_item, recipe.output);
+    }
 
-    //     draw_rect(rect_rec, opacity(color_bg, 0.6));
-    //     draw_item(rect_output, rec.output);
+    float32 stride = rect_recipe.size.x + rect_recipe.size.x/2.0;
+    for 0 .. recipe_current.input.length {
+        UI_Rect rect_glyph = translate(rect_recipe, stride*(it+1) - stride/2.0, 0);
+        UI_Rect rect_slot  = translate(rect_recipe, stride*(it+1), 0);
 
-    //     for 0 .. rec.input.length {
-    //         Item ing = rec.input[it];
-    //         UI_Rect rect_ing = translate(child(rect_rec, -1,0, slot_size, slot_size), (slot_size+4*px)*it, 0);
-    //         draw_item(rect_ing, ing);
-    //     }
-    // }
+        char c = it == 0 ? '=' : '+';
+        draw_glyph(immediate_layer, rect_glyph.center, rect_glyph.size.y, c, Gray);
+        draw_slot_background(rect_slot, 0.0, 1.0);
+
+        UI_Rect rect_item = slot_item_rect(rect_slot, 0.0);
+        Item item = recipe_current.input[it];
+        draw_item(rect_item, item);
+    }
+
+    draw_item_tooltip(point(rect_recipe, 1,1), recipe_current.output, 1.0 - clamp01(abs(state.time_recipe)));
+
+
+    UI_Slot* select = *state.select_slot;
+    bool can_craft = select.item.id == 0 or select.item.id == recipe_current.output.id
+
+    if hover(rect_recipe, Input.mouse_pos) {
+        if mouse_pressed(MouseButton.Left) {
+            if can_craft and player_craft(recipe_current) {
+                select.item.id = recipe_current.output.id;
+                select.item.count += recipe_current.output.count;
+
+                select.pos = rect_recipe.center;
+            }
+        }
+    }
+
+    // state.time_recipe += 5*dt;
+    state.time_recipe = exp_decay(state.time_recipe, 0, 15, dt);
 }
