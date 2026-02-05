@@ -39,6 +39,9 @@ include "src/entity.pog";
         stick        drops from bush/leaves
         plant fiber  drops from bush/grass
 
+    TODAY:
+        bush
+        block break juice
 
 */
 
@@ -50,6 +53,10 @@ Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 Shader shader_voxel_chunk;
 
 Texture2D texture_spritesheet;
+
+Sprite sprite_bush;
+
+const Block_Pixel_Size = 16;
 
 DrawBuffers db_quad3D;
 DrawBuffers db_cube;
@@ -68,6 +75,11 @@ MouseButton mouse_primary_action = .Left;
 MouseButton mouse_secondary_action = .Right;
 
 
+struct Block_Drop {
+    ToolType tool;
+    ItemIds item_id;
+}
+
 struct BlockInfo {
     char* name;
 
@@ -75,18 +87,17 @@ struct BlockInfo {
     Image image;
     Sprite sprite;
 
-    uint32 drop;
-    ToolType tool;
+    Block_Drop[] drops;
 }
 
 BlockInfo[] block_infos = {
     {"Air"},
-    {"Stone",   "stone.bmp",    tool = .Pickaxe,  drop = ItemIds.Stone },
-    {"Soil",    "soil.bmp",     tool = .Shovel,   drop = ItemIds.Soil },
-    {"Grass",   "grass.bmp",    tool = .Shovel,   drop = ItemIds.Grass },
-    {"Gravel",  "gravel.bmp",   tool = .Shovel,   drop = ItemIds.Flint_Rock },
-    {"Log",     "log.bmp",      tool = .Axe,      drop = ItemIds.Log },
-    {"Leaves",  "leaves.bmp",   tool = .Any,      drop = ItemIds.Stick }
+    {"Stone",   "stone.bmp",    drops={{.Pickaxe, .Stone}                          }},
+    {"Soil",    "soil.bmp",     drops={{.Shovel,  .Soil}                           }},
+    {"Grass",   "grass.bmp",    drops={{.Shovel,  .Grass}                          }},
+    {"Gravel",  "gravel.bmp",   drops={{.Hand,    .Flint_Rock}, {.Shovel, .Gravel} }},
+    {"Log",     "log.bmp",      drops={{.Axe,     .Log}                            }},
+    {"Leaves",  "leaves.bmp",   drops={{.Any,     .Stick}                          }}
 };
 
 enum BlockIds {
@@ -120,10 +131,11 @@ struct ItemInfo {
 }
 
 ItemInfo[] item_infos = {
-    {},
+    {tool = .Hand},
     {"Stone",   "stone.bmp",    block_id = BlockIds.Stone },
     {"Soil",    "soil.bmp",     block_id = BlockIds.Soil },
     {"Grass",   "grass.bmp",    block_id = BlockIds.Grass },
+    {"Gravel",  "gravel.bmp",   block_id = BlockIds.Gravel },
     {"Log",     "log.bmp",      block_id = BlockIds.Log },
     {"Leaves",  "leaves.bmp",   block_id = BlockIds.Leaves },
     {"Flint Hatchet", sprite_index = 0, tool = .Axe},
@@ -140,6 +152,7 @@ enum ItemIds {
     Stone;
     Soil;
     Grass;
+    Gravel;
     Log;
     Leaves;
     Flint_Hatchet;
@@ -206,8 +219,8 @@ void main() {
 
     uint32 ss_size = (floorf(sqrtf(block_infos.length as float32)) + 1) as uint32;
     Image spritesheet = {};
-    spritesheet.width = ss_size * 16;
-    spritesheet.height = ss_size * 16;
+    spritesheet.width = ss_size * Block_Pixel_Size;
+    spritesheet.height = ss_size * Block_Pixel_Size;
     spritesheet.pixels = calloc(spritesheet.width * spritesheet.height, sizeof Color);
 
     for 0 .. block_infos.length {
@@ -215,8 +228,8 @@ void main() {
         if bi.image_file_name {
             bi.image = load_bitmap(concat("assets/", bi.image_file_name));
 
-            uint32 x = (it % ss_size) * 16;
-            uint32 y = (it / ss_size) * 16;
+            uint32 x = (it % ss_size) * Block_Pixel_Size;
+            uint32 y = (it / ss_size) * Block_Pixel_Size;
 
             image_blit(spritesheet, bi.image, x, y);
         }
@@ -231,14 +244,13 @@ void main() {
         if bi.image_file_name {
             bi.sprite.tex = texture_spritesheet;
 
-            float32 f = 16.0 / spritesheet.width;
+            float32 f = Block_Pixel_Size as float32 / spritesheet.width;
             bi.sprite.uv_offset = make_vec(it % ss_size, it / ss_size) * f;
             bi.sprite.uv_scale = {f,f};
         }
     }
 
     Sprite items_spritesheet = make_sprite(load_texture2D("assets/items.bmp"));
-
     for 0 .. item_infos.length {
         let info = *item_infos[it];
         if info.image_file_name {
@@ -247,9 +259,12 @@ void main() {
             set_filter(info.sprite.tex, TextureFilter.nearest);
             free(image.pixels);
         } else {
-            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, 16, 4);
+            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, 4);
         }
     }
+
+    sprite_bush = make_sprite(load_texture2D("assets/bush.bmp"));
+
 
     {
         let m = mesh_create();
@@ -409,13 +424,12 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
 // cusror(Abled b);
 // cursor(Disabled);
 
-void player_move_input(Entity* en, Camera cam, float32 dt) {
+void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
 
     vec3 f = noz(forward(cam.transform) * make_vec(1,0,1));
     vec3 s = noz(   left(cam.transform) * make_vec(1,0,1));
 
-    let i = Input.wasd;
-    vec3 movement = noz(f*i.y - s*i.x);
+    vec3 movement = noz(f*input.y - s*input.x);
 
     static float32 max_speed = 3; // 4.317;
     static float32 acceleration = 30;
@@ -435,7 +449,7 @@ void player_move_input(Entity* en, Camera cam, float32 dt) {
     en.cof_k = 0.8; //player_friction(deepest_inter.normal);
     en.cof_s = 1.2 * en.cof_k;
 
-    if sqlength(Input.wasd) > 0 {
+    if sqlength(input) > 0 {
         en.vel = move(en.vel, target_vel, acceleration*dt);
         en.cof_k = 0;
         en.cof_s = 0;
@@ -490,7 +504,6 @@ void player_control(float32 dt) {
             rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
         }
 
-        player_move_input(*player, world_cam, dt);
 
         Item* item_hand = player_held_item();
         if is_item(@item_hand) {
@@ -505,6 +518,10 @@ void player_control(float32 dt) {
 
         item_action(item_hand, dt);
     }
+
+    vec2 input = player_backpack_open ? {0,0} : Input.wasd;
+    player_move_input(*player, world_cam, input, dt);
+
 
     if key_pressed('F') {
         for 1 .. item_infos.length {
@@ -603,16 +620,19 @@ void item_action(Item* item, float32 dt) {
         BlockInfo block_info = block_infos[target_block.block_id];
 
         if item_info.tool {
-            if item_info.tool & block_info.tool {
-                gizmo_box(make_vec(target_block.coord), vec3_one, Black);
+            for 0 .. block_info.drops.length {
+                let drop = block_info.drops[it];
+                if item_info.tool & drop.tool {
+                    gizmo_box(make_vec(target_block.coord), vec3_one, Black);
 
-                if tool_swung and tool_swing_power > 0.7 {
-                    set_block(target_block.coord, 0);
+                    if tool_swung and tool_swing_power > 0.7 {
+                        set_block(target_block.coord, 0);
 
-                    Item item_drop = {block_info.drop, 1};
-                    spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
+                        Item item_drop = {drop.item_id, 1};
+                        spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
+                    }
 
-                    // add_item(*player_hotbar, item_drop);
+                    break;
                 }
             }
         } else if item_info.block_id {

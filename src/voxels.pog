@@ -139,11 +139,16 @@ void init_chunk(Chunk* chunk, ivec3 coord) {
         chunk.height_map[z * s + x] = height;
     }
 
+    int32 sample_height(Chunk* chunk, int32 x, z) {
+        int32 s = Chunk_Size;
+        float32 height = chunk.height_map[z * s + x];
+        return map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
+    }
+
     for z: 0 .. s for x: 0 .. s
     for y: 0 .. s {
         uint16 block_id = BlockIds.Air;
-        float32 height = chunk.height_map[z * s + x];
-        int32 h = map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
+        int32 h = sample_height(chunk, x, z);
 
         int32 depth = h - y;
         if depth >= 0 {
@@ -155,17 +160,31 @@ void init_chunk(Chunk* chunk, ivec3 coord) {
         chunk.blocks[get_index(x, y, z)] = block_id;
     }
 
-
     int32 seed = 0;
+
+    int32 rx = (random01(seed++)*s) as int32;
+    int32 rz = (random01(seed++)*s) as int32;
+    int32 ry = sample_height(chunk, rx, rz);
+
+    chunk.blocks[get_index(rx, ry, rz)] = BlockIds.Gravel;
+
     for 0 .. 10 {
         int32 x = (random01(seed++)*s) as int32;
         int32 z = (random01(seed++)*s) as int32;
-
-        float32 height = chunk.height_map[z * s + x];
-        int32 h = map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
-
-        gen_tree(*seed, chunk, make_ivec(x, h, z));
+        int32 y = sample_height(chunk, x, z);
+        gen_tree(*seed, chunk, make_ivec(x, y, z));
     }
+
+    for 0 .. 3 {
+        int32 x = (random01(seed++)*s) as int32;
+        int32 z = (random01(seed++)*s) as int32;
+
+        int32 y = sample_height(chunk, x, z);
+
+        vec3 pos = {x,y+1,z} + make_vec(chunk.coord*s);
+        spawn_bush(pos);
+    }
+
 }
 
 void gen_tree(int32* seed, Chunk* chunk, ivec3 start_pos) {
@@ -188,6 +207,13 @@ void gen_tree(int32* seed, Chunk* chunk, ivec3 start_pos) {
         vec3 end = start + dir;
         set_line_segment(chunk, start, end, BlockIds.Log);
         start = end;
+    }
+
+    ivec3 canopy_center = make_ivec(round(start));
+    int32 size = 3;
+    for (z:0 .. size) for (y:0 .. size) for (x:0 .. size) {
+        ivec3 coord = canopy_center + {x,y,z};
+        if chunk_bound(coord) chunk.blocks[get_index(coord)] = BlockIds.Leaves;
     }
 
 
@@ -256,6 +282,9 @@ void triangulate_chunk(Chunk* chunk) {
     list_clear(chunk.mesh.vertices);
     list_clear(chunk.mesh.indices);
 
+    uint32 ss_size = texture_spritesheet.width / Block_Pixel_Size;
+    vec2 uv_scale = make_vec2(1.0 / ss_size as float32);
+
     int32 s = Chunk_Size;
     for z: 0 .. s  for y: 0 .. s  for x: 0 .. s {
         uint16 block_id = chunk.blocks[get_index(x, y, z)];
@@ -268,9 +297,6 @@ void triangulate_chunk(Chunk* chunk) {
         uint16 pz = z+1 < s  ? chunk.blocks[get_index(x, y, z+1)] : 0;
         uint16 nz = z-1 >= 0 ? chunk.blocks[get_index(x, y, z-1)] : 0;
 
-        uint32 ss_width = texture_spritesheet.width;
-        uint32 ss_size = ss_width / 16;
-        vec2 uv_scale = make_vec2(16.0 / ss_width);
         vec2 uv = make_vec(block_id % ss_size, block_id / ss_size) * uv_scale;
 
         vec3 pos = {x,y,z};

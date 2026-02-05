@@ -30,6 +30,7 @@ enum Entitykind {
     Player;
     Item;
     Block;
+    Bush;
 }
 
 struct Entity {
@@ -51,6 +52,7 @@ struct Entity {
     float32 cof_k, cof_s;
 
     bool is_grounded;
+    bool grid_aligned;
 }
 
 struct Particle_Cube {
@@ -124,6 +126,25 @@ Entity* make_block_entity(ivec3 coord) {
     set_block(coord, 0);
     return spawn_block_entity(make_vec(coord), vec3_zero, block_id);
 }
+
+Entity* spawn_bush(vec3 pos) {
+    Entity* en = list_append(*world.entity_pool);
+    @en = {};
+    en.kind = .Bush;
+    en.aabb = {vec3_zero, vec3_one};
+
+    en.tr = transform_default();
+    en.tr.position = pos;
+    en.tr.scale = make_vec3(sprite_bush.tex.width as float32 / Block_Pixel_Size);
+
+
+    en.mass = 1.0;
+    en.bounciness = 0.0;
+    en.cof_k = 1.0;
+    en.cof_s = 1.2 * en.cof_k;
+    return en;
+}
+
 
 struct BoxInter {
     vec3 normal;
@@ -344,12 +365,10 @@ Entity_Raycast_Result entity_raycast(World* w, vec3 o,d, float32 max_dist) {
 
     for 0 .. list_length(w.entity_pool) {
         let en = *w.entity_pool[it];
+        Box aabb = effective_aabb(en);
 
-        vec3 pos = en.tr.position + en.aabb.center;
-        vec3 hsize = en.aabb.size*0.5;
-
-        vec3 p1 = pos - hsize;
-        vec3 p2 = pos + hsize;
+        vec3 p1 = aabb.center - aabb.size*0.5;
+        vec3 p2 = aabb.center + aabb.size*0.5;
         vec2 ts = ray_aabb_intersects(o,d, p1, p2);
         float32 min_d = ts.x;
         float32 max_d = ts.y;
@@ -424,6 +443,12 @@ void draw_shadow(vec3 pos, float32 scale) {
     }
 }
 
+void draw_x_planes(Sprite sprite, Material_PBR material, mat4 model) {
+    mat4 m1 = mat4_rotate(axis_angle(vec3_unit_y, Pi/4.0)) * model;
+    mat4 m2 = mat4_rotate(axis_angle(vec3_unit_y, -Pi/4.0)) * model;
+    draw_quad(sprite, material, m1);
+    draw_quad(sprite, material, m2);
+}
 
 /* TODO: thinking about how I want to add physics to items held in hand
 struct Physics {
@@ -472,7 +497,9 @@ void world_draw(DeferredRenderer* R, World* w) {
         tr.position = tr.position + en.aabb.center;
         mat4 model = to_matrix(tr);
 
-        Material_PBR mat = {{1,1,1}, 0.1, 0.1};
+        Material_PBR mat      = {{1,1,1}, 0.1, 0.1};
+        Material_PBR mat_bush = {{1,1,1}, 0.0, 0.5};
+
 
         switch (en.kind) {
         case .Item: {
@@ -490,9 +517,14 @@ void world_draw(DeferredRenderer* R, World* w) {
             BlockInfo info = block_infos[en.block_id];
             draw_cube(info.sprite, mat, model);
         } break;
+        case .Bush: {
+            draw_x_planes(sprite_bush, mat, mat4_scale(1, 1, 1) * model);
+        } break;
         }
     }
 }
+
+
 
 
 
