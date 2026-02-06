@@ -53,6 +53,8 @@ Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 Shader shader_voxel_chunk;
 
 Texture2D texture_spritesheet;
+Texture2D texture_items_spritesheet;
+Texture2D texture_bush;
 
 Sprite sprite_bush;
 
@@ -123,21 +125,22 @@ enum ToolType {
 struct Item { ItemIds id; uint32 count; }
 struct ItemInfo {
     char* name;
-    char* image_file_name;
     Sprite sprite;
     uint32 sprite_index;
     ToolType tool;
     uint16 block_id;
 }
 
+
+
 ItemInfo[] item_infos = {
     {tool = .Hand},
-    {"Stone",   "stone.bmp",    block_id = BlockIds.Stone },
-    {"Soil",    "soil.bmp",     block_id = BlockIds.Soil },
-    {"Grass",   "grass.bmp",    block_id = BlockIds.Grass },
-    {"Gravel",  "gravel.bmp",   block_id = BlockIds.Gravel },
-    {"Log",     "log.bmp",      block_id = BlockIds.Log },
-    {"Leaves",  "leaves.bmp",   block_id = BlockIds.Leaves },
+    {"Stone",   block_id = BlockIds.Stone },
+    {"Soil",    block_id = BlockIds.Soil },
+    {"Grass",   block_id = BlockIds.Grass },
+    {"Gravel",  block_id = BlockIds.Gravel },
+    {"Log",     block_id = BlockIds.Log },
+    {"Leaves",  block_id = BlockIds.Leaves },
     {"Flint Hatchet", sprite_index = 0, tool = .Axe},
     {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
     {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe},
@@ -242,7 +245,7 @@ void main() {
     for 0 .. block_infos.length {
         let bi = *block_infos[it];
         if bi.image_file_name {
-            bi.sprite.tex = texture_spritesheet;
+            bi.sprite.tex = *texture_spritesheet;
 
             float32 f = Block_Pixel_Size as float32 / spritesheet.width;
             bi.sprite.uv_offset = make_vec(it % ss_size, it / ss_size) * f;
@@ -250,20 +253,19 @@ void main() {
         }
     }
 
-    Sprite items_spritesheet = make_sprite(load_texture2D("assets/items.bmp"));
+    texture_items_spritesheet = load_texture2D("assets/items.bmp");
+    Sprite items_spritesheet = make_sprite(*texture_items_spritesheet);
     for 0 .. item_infos.length {
         let info = *item_infos[it];
-        if info.image_file_name {
-            let image = load_bitmap(concat("assets/", info.image_file_name));
-            info.sprite = make_sprite(create_texture2D(image));
-            set_filter(info.sprite.tex, TextureFilter.nearest);
-            free(image.pixels);
+        if info.block_id {
+            info.sprite = block_infos[info.block_id].sprite;
         } else {
             info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, 4);
         }
     }
 
-    sprite_bush = make_sprite(load_texture2D("assets/bush.bmp"));
+    texture_bush = load_texture2D("assets/bush.bmp");
+    sprite_bush = make_sprite(*texture_bush);
 
 
     {
@@ -610,6 +612,9 @@ void item_action(Item* item, float32 dt) {
         if tool_swung {
             uint32 damage = 10 * tool_swing_power;
             en.vel = en.vel + d*10;
+
+            en.hp -= min(damage, en.hp);
+
             color_bb = Red;
         }
 
@@ -696,10 +701,6 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
             roughness = 0.1
         };
 
-        // uint32 gl_texture = white_texture.gl_handle;
-        // uint32 gl_texture = block_infos[1].texture.gl_handle;
-        uint32 gl_texture = texture_spritesheet.gl_handle;
-
         float32 size = Chunk_Size;
         vec3 pos = make_vec(chunk.coord)*size;
 
@@ -712,7 +713,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         set_depth_mode(DepthTest.Less_Equal, true);
         set_blend_mode(Blend.Overwrite);
         set_face_render_mode(Poly.Fill, Poly.Cull);
-        draw_geometry(R, chunk.db, pbr, gl_texture, make_mat4(pos, 1));
+        draw_geometry(R, chunk.db, pbr, *texture_spritesheet, make_mat4(pos, 1));
     }
 
 

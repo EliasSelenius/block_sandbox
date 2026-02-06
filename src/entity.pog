@@ -72,10 +72,19 @@ Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     Entity* en = list_append(*world.entity_pool);
     @en = {};
     en.kind = .Item;
-    en.aabb = {vec3_zero, vec3_one*0.5};
+    en.aabb = {vec3_zero, vec3_one};
     en.item_stack = item;
+
     en.tr = transform_default();
     en.tr.position = pos;
+
+    ItemInfo info = item_infos[item.id];
+    if info.tool {
+        en.tr.scale = vec3_one*1.0;
+    } else {
+        en.tr.scale = vec3_one*0.5;
+    }
+
     en.vel = vel;
     en.cooldown = cooldown;
 
@@ -131,12 +140,13 @@ Entity* spawn_bush(vec3 pos) {
     Entity* en = list_append(*world.entity_pool);
     @en = {};
     en.kind = .Bush;
-    en.aabb = {vec3_zero, vec3_one};
+    float32 s = 1.0 / sqrtf(2.0);
+    en.aabb = {vec3_zero, {s,1,s}};
 
     en.tr = transform_default();
     en.tr.position = pos;
     en.tr.scale = make_vec3(sprite_bush.tex.width as float32 / Block_Pixel_Size);
-
+    en.hp = 10;
 
     en.mass = 1.0;
     en.bounciness = 0.0;
@@ -260,6 +270,7 @@ void entity_update(Entity* en, float32 dt) {
     en.tr.position = en.tr.position + grid_inter.move;
 
     bool despawn = false;
+    Item item_drop = {};
 
     switch (en.kind) {
     case .Item: {
@@ -299,13 +310,22 @@ void entity_update(Entity* en, float32 dt) {
         vec3 o = round(en.tr.position);
         vec3 diff = en.tr.position - o;
         ivec3 block_coord = make_ivec(o);
-        let block_below = get_block(block_coord + {0,-1,0})
+        let block_below = get_block(block_coord + {0,-1,0});
 
         if sqlength(diff) < sq(0.25) and sqlength(en.vel) < sq(0.1) and block_below != 0 {
             set_block(block_coord, en.block_id);
             despawn = true;
         }
     } break;
+
+    case .Bush: {
+        item_drop = { .Plant_Fiber, 1 };
+    } break;
+    }
+
+    if item_drop.id and en.hp == 0 {
+        despawn = true;
+        spawn_item(en.tr.position, random_unit_vec3()*3, item_drop, 0.3);
     }
 
     if despawn {
@@ -387,45 +407,16 @@ Entity_Raycast_Result entity_raycast(World* w, vec3 o,d, float32 max_dist) {
     return result;
 }
 
-void set_material(Material_PBR material) {
-    set_uniform("albedo_color", material.albedo);
-    set_uniform("metallic",     material.metallic);
-    set_uniform("roughness",    material.roughness);
-}
 
-void set_sprite(Sprite sprite) {
-    bind_texture2D(sprite.tex.gl_handle, 0);
-    set_uniform("u_uv_offset", sprite.uv_offset);
-    set_uniform("u_uv_scale", sprite.uv_scale);
-}
-
-void set_model_matrix(mat4 model) {
-    let ubo = get_ubo("Instances");
-    update_buffer(ubo.buffer_id, sizeof mat4, *model);
-}
+DrawCommand draw_command_quads = make_draw_command(*db_quad3D, drawmode_gpass_double_sided);
+DrawCommand draw_command_cubes = make_draw_command(*db_cube,   drawmode_gpass);
 
 void draw_quad(Sprite sprite, Material_PBR material, mat4 model) {
-    set_model_matrix(model);
-    set_sprite(sprite);
-    set_material(material);
-
-    set_depth_mode(DepthTest.Less_Equal, true);
-    set_blend_mode(Blend.Overwrite);
-    set_face_render_mode(Poly.Fill, Poly.Fill);
-
-    draw_elements(db_quad3D);
+    batch(*draw_command_quads, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
 }
 
 void draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
-    set_model_matrix(model);
-    set_sprite(sprite);
-    set_material(material);
-
-    set_depth_mode(DepthTest.Less_Equal, true);
-    set_blend_mode(Blend.Overwrite);
-    set_face_render_mode(Poly.Fill, Poly.Cull);
-
-    draw_elements(db_cube);
+    batch(*draw_command_cubes, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
 }
 
 void draw_shadow(vec3 pos, float32 scale) {
@@ -439,7 +430,7 @@ void draw_shadow(vec3 pos, float32 scale) {
 
         float32 shadow_scale = 1.0 - scale * (pos.y - shadow_pos.y);
 
-        draw_quad(make_sprite(white_texture), pbr, make_mat4(shadow_pos, make_vec3(shadow_scale), axis_angle(vec3_unit_x, Half_Pi)));
+        draw_quad(make_sprite(*white_texture), pbr, make_mat4(shadow_pos, make_vec3(shadow_scale), axis_angle(vec3_unit_x, Half_Pi)));
     }
 }
 
@@ -471,6 +462,10 @@ mat4 get_transform(Physics p) {
 
 void world_draw(DeferredRenderer* R, World* w) {
 
+    list_clear(draw_command_quads.instance_data);
+    list_clear(draw_command_cubes.instance_data);
+
+
     Item* item_hand = player_held_item();
     if item_hand.id != 0 {
         ItemInfo info = item_infos[item_hand.id];
@@ -489,13 +484,14 @@ void world_draw(DeferredRenderer* R, World* w) {
     }
 
 
+
     for 0 .. list_length(w.entity_pool) {
         let en = *w.entity_pool[it];
 
-        Transform tr = en.tr;
-        tr.scale = tr.scale * en.aabb.size;
-        tr.position = tr.position + en.aabb.center;
-        mat4 model = to_matrix(tr);
+        // Transform tr = en.tr;
+        // tr.scale = tr.scale * en.aabb.size;
+        // tr.position = tr.position + en.aabb.center;
+        mat4 model = to_matrix(en.tr);
 
         Material_PBR mat      = {{1,1,1}, 0.1, 0.1};
         Material_PBR mat_bush = {{1,1,1}, 0.0, 0.5};
@@ -511,7 +507,7 @@ void world_draw(DeferredRenderer* R, World* w) {
         } break;
 
         case .Player: {
-            draw_cube(make_sprite(white_texture), mat, model);
+            draw_cube(make_sprite(*white_texture), mat, model);
         } break;
         case .Block: {
             BlockInfo info = block_infos[en.block_id];
@@ -522,6 +518,9 @@ void world_draw(DeferredRenderer* R, World* w) {
         } break;
         }
     }
+
+    issue_draw_command(*draw_command_quads);
+    issue_draw_command(*draw_command_cubes);
 }
 
 
@@ -1092,7 +1091,7 @@ void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
 
 
     UI_Slot* select = *state.select_slot;
-    bool can_craft = select.item.id == 0 or select.item.id == recipe_current.output.id
+    bool can_craft = select.item.id == 0 or select.item.id == recipe_current.output.id;
 
     if hover(rect_recipe, Input.mouse_pos) {
         if mouse_pressed(MouseButton.Left) {
