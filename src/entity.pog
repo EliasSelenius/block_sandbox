@@ -1,20 +1,50 @@
 
+
 const player_height = 1.83;
 Box box_player = {center={0,-(player_height/2.0 - 0.2),0}, size={0.7, player_height, 0.7}};
 
-Entity player = {
+struct Player {
+    Stats stats;
+
+    Block_Raycast_Result target_block;
+    uint32 target_block_hp;
+    uint32 target_block_max_hp;
+
+    float32 tool_charge;
+
+}
+
+Player player = {
+    stats = {
+        max_speed   = 4.0,
+        acc_time    = 0.1,
+        jump_height = 1.2,
+        jump_time   = 0.8
+    }
+};
+
+Entity player_en = {
     tr = {scale=vec3_one, rotation=quat_identity},
     aabb = box_player,
     mass = 1.0
 };
 
+struct Stats {
+    float32 max_speed;
+    float32 acc_time;
+    float32 jump_height;
+    float32 jump_time;
+}
+
+
+float32 player_gravity() return -8.0 * player.stats.jump_height / sq(player.stats.jump_time);
+float32 player_jump_vel() return 4.0 * player.stats.jump_height / player.stats.jump_time;
+
+
 Inventory player_backpack = make_inventory(3, 9);
 Inventory player_hotbar = make_inventory(1, 9);
 uint32 hotbar_selected_slot = 0;
 bool player_backpack_open = false;
-
-float32 player_swing_anim_time = 0;
-float32 player_tool_charge = 0;
 
 bool player_holding_entity = false;
 vec3 player_held_entity_offset;
@@ -147,6 +177,7 @@ Entity* spawn_bush(vec3 pos) {
     en.tr.position = pos;
     en.tr.scale = make_vec3(sprite_bush.tex.width as float32 / Block_Pixel_Size);
     en.hp = 10;
+    en.grid_aligned = true;
 
     en.mass = 1.0;
     en.bounciness = 0.0;
@@ -243,17 +274,16 @@ Grid_Inter grid_aabb_collision_check(Box box) {
     return {deepest_inter, move, is_grounded};
 }
 
-float32 jump_height = 1.2;
-float32 jump_time   = 0.8;
-
-float32 player_gravity() return -8.0 * jump_height/sq(jump_time);
-float32 player_jump_vel() return 4.0 * jump_height/jump_time;
-
 void entity_update(Entity* en, float32 dt) {
 
     float32 g = -9.8;
-    if en == *player {
+    if en == *player_en {
         g = player_gravity();
+    }
+
+    if en.grid_aligned {
+        g = 0;
+        en.vel = {};
     }
 
     en.vel.y += g*dt;
@@ -265,8 +295,15 @@ void entity_update(Entity* en, float32 dt) {
     let grid_inter = grid_aabb_collision_check(en_world_aabb);
     en.is_grounded = grid_inter.is_grounded;
 
+    float32 cof_k = en.cof_k;
+    float32 cof_s = en.cof_s;
+    if !en.is_grounded {
+        cof_k = 0.0;
+        cof_s = 0.0;
+    }
+
     float32 e = en.bounciness;
-    en.vel = calc_new_vel(en.vel, grid_inter.box_inter.normal, en.mass, e, en.cof_s, en.cof_k);
+    en.vel = calc_new_vel(en.vel, grid_inter.box_inter.normal, en.mass, e, cof_s, cof_k);
     en.tr.position = en.tr.position + grid_inter.move;
 
     bool despawn = false;
@@ -277,8 +314,8 @@ void entity_update(Entity* en, float32 dt) {
         rotate(*en.tr, vec3_unit_y, Pi*dt);
 
         if en.cooldown <= 0.0 {
-            let player_aabb = effective_aabb(*player);
-            // let player_feet_pos = player.tr.position + player.aabb.center - {0, player.aabb.size.y/2.0, 0};
+            let player_aabb = effective_aabb(*player_en);
+            // let player_feet_pos = player_en.tr.position + player_en.aabb.center - {0, player_en.aabb.size.y/2.0, 0};
 
             let diff = player_aabb.center - en.tr.position;
             let sqd = sqlength(diff);
@@ -290,7 +327,7 @@ void entity_update(Entity* en, float32 dt) {
                 }
             } else {
                 if sqd < sq(2) {
-                    // look_at(*en.tr, player.tr.position);
+                    // look_at(*en.tr, player_en.tr.position);
                     static float32 item_pickup_acceleration = 100;
                     en.vel = en.vel + {0,-g, 0}*dt + noz(diff)*item_pickup_acceleration*dt;
                 }
@@ -411,12 +448,12 @@ Entity_Raycast_Result entity_raycast(World* w, vec3 o,d, float32 max_dist) {
 DrawCommand draw_command_quads = make_draw_command(*db_quad3D, drawmode_gpass_double_sided);
 DrawCommand draw_command_cubes = make_draw_command(*db_cube,   drawmode_gpass);
 
-void draw_quad(Sprite sprite, Material_PBR material, mat4 model) {
-    batch(*draw_command_quads, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
+InstanceData* draw_quad(Sprite sprite, Material_PBR material, mat4 model) {
+    return batch(*draw_command_quads, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
 }
 
-void draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
-    batch(*draw_command_cubes, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
+InstanceData* draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
+    return batch(*draw_command_cubes, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
 }
 
 void draw_shadow(vec3 pos, float32 scale) {
@@ -470,19 +507,40 @@ void world_draw(DeferredRenderer* R, World* w) {
     if item_hand.id != 0 {
         ItemInfo info = item_infos[item_hand.id];
 
-        vec3 offset = make_vec(-(player.aabb.size.x * 1.3 / 2.0), -0.3, 0.5);
+        vec3 offset = make_vec(-(player_en.aabb.size.x * 1.3 / 2.0), -0.3, 0.5);
 
         float32 d90 = Pi/4.0;
         float32 d45 = d90/2.0;
         quat rotation = axis_angle(vec3_unit_y, -d90*2) * axis_angle(vec3_unit_x, -(d90+d45));
 
         vec3 bottom_left = {-0.5, 0.5, 0};
-        quat tool_charge_rot = axis_angle(vec3_unit_z, d90 * player_tool_charge);
-        let model = rotate(mat4_id, tool_charge_rot, bottom_left) * make_mat4(offset, vec3_one, rotation) * to_matrix(player.tr);
+        quat tool_charge_rot = axis_angle(vec3_unit_z, d90 * player.tool_charge);
+        let model = rotate(mat4_id, tool_charge_rot, bottom_left) * make_mat4(offset, vec3_one, rotation) * to_matrix(player_en.tr);
         Material_PBR mat = {{1,1,1}, 0.1, 0.1};
         draw_quad(info.sprite, mat, model);
     }
 
+
+    if player.target_block_hp != player.target_block_max_hp {
+        vec3 pos = make_vec(player.target_block.coord);
+        vec3 prev_pos = make_vec(player.target_block.prev_coord);
+
+        BlockInfo info = block_infos[player.target_block.block_id];
+
+        Transform tr = transform_default();
+        tr.position = pos;
+        tr.scale = vec3_one*1.01;
+        // look_at(*tr, prev_pos);
+
+        mat4 model = to_matrix(tr);
+
+        vec3 albedo = info.color_avg*0.5;
+        Material_PBR mat = {albedo, 0.0, 1.0};
+        let data = draw_cube(sprite_crack, mat, model);
+
+        float32 prct = player.target_block_hp as float32 / player.target_block_max_hp;
+        data.albedo_color.w = prct;
+    }
 
 
     for 0 .. list_length(w.entity_pool) {
@@ -661,6 +719,7 @@ struct UI_Inventory_State {
     Item select_item;
 
     float32 item_tooltip_time;
+    float32 recipe_tooltip_time;
 
     float32 time_recipe;
     int32 selected_recipe_index;
@@ -834,7 +893,7 @@ void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots
     }
 
     UI_Rect item_rect = slot_item_rect(slot);
-    draw_item(item_rect, @slot.item, slot.last_item_count, slot.item_count_t);
+    draw_item(item_rect, @slot.item, slot.last_item_count, slot.item_count_t, 1.0);
 
     update_slot(slot, slot.rect.center, dt);
 
@@ -858,8 +917,8 @@ void update_slot(UI_Slot* slot, vec2 target_pos, float32 dt) {
     slot.vel = slot.vel + acc * dt;
 }
 
-void draw_item(UI_Rect rect, Item item) draw_item(rect, item, 0, 0.0);
-void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t) {
+void draw_item(UI_Rect rect, Item item) draw_item(rect, item, 0, 0.0, 1.0);
+void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t, transparency) {
     if item.id == 0 return;
 
     ItemInfo info = item_infos[item.id];
@@ -867,7 +926,7 @@ void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t) {
 
     float32 sprite_pixel_size = get_sprite_pixel_size(info.sprite).x;
     Transform2D tr = { pos = rect.center, scale = scale / sprite_pixel_size };
-    vec4 color_factor = vec4_one;
+    vec4 color_factor = {1,1,1,transparency};
     vec4 color_additive = vec4_zero;
     vec4 color_outline = vec4_zero;
     draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
@@ -929,8 +988,7 @@ void draw_inventory() {
     UI_Slot* hover = state.hover_slot;
     UI_Slot* select = *state.select_slot;
 
-
-    draw_crafting_menu(state, slot_size, dt);
+    bool did_craft = draw_crafting_menu(state, slot_size, dt);
 
     if hover {
         UI_Slot* dest = null;
@@ -970,12 +1028,19 @@ void draw_inventory() {
     }
 
     if select.item.id {
+
+        if !hover and !did_craft and mouse_pressed(MouseButton.Left) {
+            update_matrices(*world_cam);
+            let o = world_cam.transform.position;
+            let d = camera_ray(world_cam, Input.mouse_pos);
+
+            spawn_item(o,d*4, @select.item, 3);
+            @select.item = {}
+        }
+
         float32 item_scale = 1.5;
         UI_Rect item_rect = {select.pos, vec2_one*slot_size*ui_item_scale_select};
         draw_item(item_rect, state.select_item);
-
-        // select.pos = exp_decay(select.pos, Input.mouse_pos, 10, dt);
-
         update_slot(select, Input.mouse_pos, dt);
     }
 }
@@ -1013,25 +1078,9 @@ void draw_hotbar() {
     }
 
     draw_slots(state, slots, null);
-
-
-    // for 0 .. hotbar.cols {
-    //     UI_Rect rect = div_x(hotbar_rect, hotbar.cols, it);
-
-    //     draw_rect(pad(rect, 4*px), color);
-
-    //     Item item = hotbar.items[it];
-    //     UI_Rect item_rect = slot_item_rect(slot);
-    //     draw_item(item_rect, item);
-
-    //     if it == index {
-    //         Color selection_highlight_color = opacity(Gray, 0.6);
-    //         draw_rect(pad_top(rect, width*(7/8.0)), selection_highlight_color);
-    //     }
-    // }
 }
 
-void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
+bool draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
     float32 px = 2.0 / app.window_height;
 
     draw_rect(state.rect_menu, opacity(Black, 0.6));
@@ -1042,15 +1091,14 @@ void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
     rect_all.size.y *= 5;
 
     int32 recipes_count = recipes.length as int32;
-    if hover(rect_all, Input.mouse_pos) {
-        int32 s = sign(Input.mouse_scroll);
+    int32 s = sign(Input.mouse_scroll) * hover(rect_all, Input.mouse_pos);
 
-        int32 prev = state.selected_recipe_index;
-        state.selected_recipe_index = (recipes_count + state.selected_recipe_index + s) % recipes_count;
+    int32 prev = state.selected_recipe_index;
+    state.selected_recipe_index = (recipes_count + state.selected_recipe_index + s) % recipes_count;
 
-        if state.selected_recipe_index != prev {
-            state.time_recipe = 1.0*s;
-        }
+    if state.selected_recipe_index != prev {
+        state.time_recipe = 1.0*s;
+        state.recipe_tooltip_time = 0.0;
     }
 
 
@@ -1062,7 +1110,7 @@ void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
         float32 y_trans = rect_recipe.size.y*it + offset;
         UI_Rect rect = translate(rect_recipe, 0, y_trans);
 
-        float32 alpha = 1.0 - abs(y_trans) / (rect_recipe.size.y*a);
+        float32 alpha = clamp01(1.0 - abs(y_trans) / (rect_recipe.size.y*a));
         // float32 alpha = 1.0 - abs((it as float32) / a);
 
         int32 recipe_index = (recipes_count + state.selected_recipe_index + it) % recipes_count;
@@ -1070,7 +1118,7 @@ void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
 
         draw_slot_background(rect, 0.0, alpha);
         UI_Rect rect_item = slot_item_rect(rect, 0.0);
-        draw_item(rect_item, recipe.output);
+        draw_item(rect_item, recipe.output, 0, 0.0, alpha);
     }
 
     float32 stride = rect_recipe.size.x + rect_recipe.size.x/2.0;
@@ -1087,23 +1135,28 @@ void draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
         draw_item(rect_item, item);
     }
 
-    draw_item_tooltip(point(rect_recipe, 1,1), recipe_current.output, 1.0 - clamp01(abs(state.time_recipe)));
+    draw_item_tooltip(point(rect_recipe, 1,1), recipe_current.output, state.recipe_tooltip_time);
+    state.recipe_tooltip_time += dt;
 
 
     UI_Slot* select = *state.select_slot;
     bool can_craft = select.item.id == 0 or select.item.id == recipe_current.output.id;
+    bool did_craft = false;
 
-    if hover(rect_recipe, Input.mouse_pos) {
-        if mouse_pressed(MouseButton.Left) {
-            if can_craft and player_craft(recipe_current) {
-                select.item.id = recipe_current.output.id;
-                select.item.count += recipe_current.output.count;
+    if hover(rect_recipe, Input.mouse_pos)
+    if mouse_pressed(MouseButton.Left)
+    if can_craft
+    if player_craft(recipe_current)
+    {
+        select.item.id = recipe_current.output.id;
+        select.item.count += recipe_current.output.count;
 
-                select.pos = rect_recipe.center;
-            }
-        }
+        select.pos = rect_recipe.center;
+
+        did_craft = true;
     }
 
     // state.time_recipe += 5*dt;
     state.time_recipe = exp_decay(state.time_recipe, 0, 15, dt);
+    return did_craft;
 }

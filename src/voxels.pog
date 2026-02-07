@@ -70,8 +70,8 @@ void set_block(ivec3 coord, uint16 id) {
     last_chunk_interacted_with = chunk;
 }
 
-void ensure_chunks() {
-    ivec3 center = chunk_coord(player.tr.position);
+void ensure_chunks(vec3 position) {
+    ivec3 center = chunk_coord(position);
     center.y = 0;
 
     Chunk*[..] old_chunks = list_create(sizeof Chunk*);
