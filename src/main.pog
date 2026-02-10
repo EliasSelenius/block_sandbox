@@ -312,6 +312,8 @@ void main() {
         mesh_free(m);
     }
 
+    shader_voxel_chunk = load_shader("shaders/voxels.glsl");
+
     world_cam.transform.position = {-10, 32, -10};
 
 
@@ -338,6 +340,7 @@ void main() {
             rl(*R.shader_geometry);
             rl(*default2d_shader);
             rl(*ui_shader);
+            rl(*shader_voxel_chunk);
         }
 
         if key_pressed(Key.escape) {
@@ -752,7 +755,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         }
     }
 
-    for 0 .. Pool_Size {
+    if false for 0 .. Pool_Size {
         let chunk = *chunk_pool[it];
 
         Material_PBR pbr = {
@@ -777,7 +780,29 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     }
 
 
-        // use(*shader_voxel_chunk);
+    {
+        use(*shader_voxel_chunk);
+        set_uniform("u_camera_world_pos", world_cam.transform.position);
+
+        struct ChunkData {
+            ivec4 coord;
+            uint16[Chunk_Block_Count] blocks;
+        }
+
+        uint32 buffer_bytes = Pool_Size * sizeof ChunkData;
+        ChunkData* buffer = malloc(buffer_bytes);
+        for 0 .. Pool_Size {
+            let chunk = *chunk_pool[it];
+            buffer[it].coord = make_ivec(chunk.coord, 0);
+            memcpy(*buffer[it].blocks, *chunk.blocks, Chunk_Block_Count * sizeof uint16);
+        }
+
+        update_ssbo("VoxelData", buffer, buffer_bytes);
+        free(buffer);
+
+        draw_screen_quad();
+    }
+
 
 
     begin_light_pass(R);
