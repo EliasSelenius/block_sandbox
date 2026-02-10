@@ -849,19 +849,12 @@ UI_Rect slot_item_rect(UI_Rect slot_rect, float32 hover_t) {
 
 
 void draw_border(UI_Rect rect, float32 border_thickness, Color color) {
-    UI_Rect border = {};
-    border.size = {rect.size.x + border_thickness, border_thickness};
-    border.center = rect.center;
-    vec2 offset = { border_thickness, rect.size.y + border_thickness } / 2.0;
-    draw_rect(translate(border, offset), color);
-    draw_rect(translate(border, offset*-1), color);
-
-    border.size = {border.size.y, border.size.x};
-    offset = {offset.y, -offset.x};
-
-    draw_rect(translate(border, offset), color);
-    draw_rect(translate(border, offset*-1), color);
-
+    float32 t = border_thickness;
+    rect = pad(rect, -t*2);
+    draw_rect(child(rect, -1,  1, rect.size.x - t, t), color);
+    draw_rect(child(rect,  1, -1, rect.size.x - t, t), color);
+    draw_rect(child(rect, -1, -1, t, rect.size.y - t), color);
+    draw_rect(child(rect,  1,  1, t, rect.size.y - t), color);
 }
 
 void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
@@ -869,12 +862,10 @@ void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
     Color color_border = opacity(Black, opa*0.8);
 
     float32 px = 2.0 / app.window_height;
-    float32 padding = 2*px;
-    float32 border = 2*px;
 
-    let rect_inner = pad(rect, padding + 2*border);
-    draw_rect(rect_inner, color);
-    draw_border(rect_inner, border, color_border);
+    rect = pad(rect, 6*px);
+    draw_rect(rect, color);
+    draw_border(rect, 2*px, color_border);
 }
 
 void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float32 dt) {
