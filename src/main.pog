@@ -783,6 +783,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     {
         use(*shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
+        bind(texture_spritesheet);
 
         struct ChunkData {
             ivec4 coord;

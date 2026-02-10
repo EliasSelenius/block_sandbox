@@ -12,12 +12,15 @@
 // TODO: put into camera.glsl
 uniform vec3 u_camera_world_pos;
 
+uniform sampler2D u_spritesheet;
+
 layout (std430) readonly buffer Textures {
     sampler2D textures[];
 };
 
 
 
+#define Block_Pixel_Size 16
 
 #define Render_Radius 4
 #define Chunk_Pool_Size (Render_Radius*2 + 1)
@@ -131,10 +134,17 @@ HitInfo raycast(vec3 o, vec3 d) {
         uint16_t block_id = get_block(state.coord);
         if (block_id != uint16_t(0)) {
             HitInfo hit;
-            hit.uv = vec2(0.0);
             hit.dist = travel_distance(state).x;
             hit.hit_pos = o + d*hit.dist;
-            hit.normal = vec3(prev_coord - state.coord);
+
+            vec3 f = fract(hit.hit_pos);
+            ivec3 inorm = prev_coord - state.coord;
+
+                 if (bool(inorm.x)) hit.uv = f.yz;
+            else if (bool(inorm.y)) hit.uv = f.xz;
+            else if (bool(inorm.z)) hit.uv = f.xy;
+
+            hit.normal = vec3(inorm);
             hit.block_id = block_id;
             return hit;
         }
@@ -181,22 +191,27 @@ layout (location = 2) out vec3 FragColor;
 in IO_Data frag_input;
 
 void main() {
-    float metallic = 0.1;
-    float roughness = 0.1;
-    vec3 albedo = vec3(0.0);
-    vec3 normal = vec3(0.0);
-    vec3 pos = vec3(0.0);
-
     vec3 ray_origin = u_camera_world_pos;
     vec3 ray = camera_ray(frag_input.ndc);
 
     HitInfo hit = raycast(ray_origin, ray);
-
     if (hit.block_id == uint16_t(0)) discard;
 
-    pos = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
-    normal = mat3(camera.view) * hit.normal;
-    albedo = vec3(1.0);
+    vec3 pos = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
+    vec3 normal = mat3(camera.view) * hit.normal;
+
+    float metallic = 0.1;
+    float roughness = 0.1;
+
+    int block_id = int(hit.block_id);
+    int ss_size = textureSize(u_spritesheet, 0).x / Block_Pixel_Size;
+    vec2 uv_scale = vec2(1.0 / float(ss_size));
+    vec2 uv_offset = vec2(block_id % ss_size, block_id / ss_size) * uv_scale;
+
+    vec2 uv = uv_offset + hit.uv * uv_scale;
+    vec3 albedo = texture(u_spritesheet, uv).rgb;
+
+    normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, uv_offset, uv_scale, hit.normal);
 
     FragPos_Metallic = vec4(pos, metallic);
     FragNormal_Roughness = vec4(normal, roughness);
