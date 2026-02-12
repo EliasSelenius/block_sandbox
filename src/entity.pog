@@ -186,43 +186,6 @@ Entity* spawn_bush(vec3 pos) {
     return en;
 }
 
-
-struct BoxInter {
-    vec3 normal;
-    float32 depth;
-}
-
-struct Box { vec3 center, size; }
-
-Box box_overlap(vec3 p1, s1, p2, s2) {
-    vec3 min1 = p1 - s1*0.5;
-    vec3 max1 = p1 + s1*0.5;
-    vec3 min2 = p2 - s2*0.5;
-    vec3 max2 = p2 + s2*0.5;
-
-    vec3 min3 = max(min1, min2);
-    vec3 max3 = min(max1, max2);
-
-    return { (min3 + max3) * 0.5, max3 - min3 };
-}
-
-Box box_overlap(Box a, b) {
-    return box_overlap(a.center, a.size, b.center, b.size);
-}
-
-BoxInter box_inter(Box b1, b2) {
-    let o = box_overlap(b1, b2);
-    let s = o.size;
-    let r = b1.center - b2.center;
-    if s.x < s.y and s.x < s.z {
-        return { vec3_unit_x*sign(r.x), s.x };
-    } else if s.y < s.z {
-        return { vec3_unit_y*sign(r.y), s.y };
-    } else {
-        return { vec3_unit_z*sign(r.z), s.z };
-    }
-}
-
 Box effective_aabb(Entity* en) {
     Box box = en.aabb;
     box.center = box.center + en.tr.position;
