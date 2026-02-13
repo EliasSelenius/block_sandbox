@@ -10,6 +10,7 @@ const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 Chunk[Pool_Size] chunk_pool;
 Chunk* last_chunk_interacted_with;
 
+ivec3 center_chunk_coord;
 
 struct Chunk {
     float32* height_map; // TODO: in the future (when we use compute shaders) height map will not be a per chunk thing
@@ -73,6 +74,7 @@ void set_block(ivec3 coord, uint16 id) {
 void ensure_chunks(vec3 position) {
     ivec3 center = chunk_coord(position);
     center.y = 0;
+    center_chunk_coord = center;
 
     Chunk*[..] old_chunks = list_create(sizeof Chunk*);
 
