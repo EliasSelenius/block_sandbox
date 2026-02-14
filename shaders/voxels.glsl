@@ -3,7 +3,7 @@
 #extension GL_NV_gpu_shader5 : enable
 
 #include "../grax/shaders/camera.glsl"
-
+#include "../grax/shaders/lights.glsl"
 
 #define IO_Data FragData {\
     vec2 ndc;\
@@ -14,7 +14,11 @@ uniform vec3 u_camera_world_pos;
 uniform ivec3 u_center_chunk_coord;
 
 
-uniform sampler2D u_spritesheet;
+layout(binding = 0) uniform sampler2D g_buffer_pos;
+layout(binding = 1) uniform sampler2D g_buffer_normal;
+layout(binding = 2) uniform sampler2D g_buffer_albedo;
+
+layout(binding = 3) uniform sampler2D u_spritesheet;
 
 layout (std430) readonly buffer Textures {
     sampler2D textures[];
@@ -124,7 +128,7 @@ struct HitInfo {
     vec2 uv;
     vec3 hit_pos;
     vec3 normal;
-    float dist;
+    vec2 dist;
     int block_id;
 };
 
@@ -140,8 +144,8 @@ HitInfo raycast(vec3 o, vec3 d) {
 
         if (block_id != 0) {
             HitInfo hit;
-            hit.dist = travel_distance(state).x;
-            hit.hit_pos = o + d*hit.dist;
+            hit.dist = travel_distance(state);
+            hit.hit_pos = o + d*hit.dist.x;
 
             vec3 f = fract(hit.hit_pos);
             ivec3 inorm = prev_coord - state.coord;
@@ -163,7 +167,7 @@ HitInfo raycast(vec3 o, vec3 d) {
 
 
 #ifdef VertexShader ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-out IO_Data vert_ouput;
+out IO_Data vert_output;
 
 vec4 screen_covering_quad(uint vert_id) {
     vec2 positions[] = vec2[](
@@ -177,15 +181,20 @@ vec4 screen_covering_quad(uint vert_id) {
 
 void main() {
     gl_Position = screen_covering_quad(gl_VertexID);
-    vert_ouput.ndc = gl_Position.xy;
+    vert_output.ndc = gl_Position.xy;
 }
 #endif
 
 
 #ifdef FragmentShader ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-layout (location = 0) out vec4 FragPos_Metallic;
-layout (location = 1) out vec4 FragNormal_Roughness;
-layout (location = 2) out vec3 FragColor;
+
+#ifdef GPASS
+    layout (location = 0) out vec4 Output_Pos_Metallic;
+    layout (location = 1) out vec4 Output_Normal_Roughness;
+    layout (location = 2) out vec3 Output_Color;
+#else
+    out vec3 FragColor;
+#endif
 
 in IO_Data frag_input;
 
@@ -229,11 +238,35 @@ void main() {
 
     view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, uv_offset, uv_scale, hit.normal);
 
-    FragPos_Metallic     = vec4(view_pos,    metallic);
-    FragNormal_Roughness = vec4(view_normal, roughness);
-    FragColor            = vec3(albedo);
-
+    // Output_Pos_Metallic     = vec4(view_pos,    metallic);
+    // Output_Normal_Roughness = vec4(view_normal, roughness);
+    // Output_Color            = vec3(albedo);
     gl_FragDepth = get_fragdepth_from_view_space_point(view_pos);
+
+    vec3 sun_world_dir = camera.sun_dir.xyz;
+
+    LightRay light;
+    light.dir = mat3(camera.view) * sun_world_dir;
+    light.radiance = camera.sun_radiance.xyz;
+
+    Geometry geom;
+    geom.view_pos    = view_pos;
+    geom.view_normal = view_normal;
+    geom.albedo      = albedo;
+    geom.F0          = calc_base_reflectivity(albedo, metallic);
+    geom.roughness   = roughness;
+    geom.metallic    = metallic;
+
+    vec3 ambient_light = albedo * light.radiance * camera.sun_radiance.w;
+    vec3 direct_light = cook_torrance_BRDF(light, geom);
+
+    HitInfo sun_hit = raycast(hit.hit_pos, camera.sun_dir.xyz);
+    if (sun_hit.block_id != 0) {
+        float factor = sun_hit.dist.x / 10.0;
+        direct_light *= smoothstep(0.2, 0.8, clamp(factor, 0,1));
+    }
+
+    FragColor = direct_light + ambient_light;
 }
 #endif
 

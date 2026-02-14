@@ -341,6 +341,7 @@ void main() {
             rl(*default2d_shader);
             rl(*ui_shader);
             rl(*shader_voxel_chunk);
+            rl(*R.shader_dirlight);
         }
 
         if key_pressed(Key.escape) {
@@ -779,12 +780,13 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         draw_geometry(R, chunk.db, pbr, *texture_spritesheet, make_mat4(pos, 1));
     }
 
+    begin_light_pass(R);
 
     {
         use(*shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
         set_uniform("u_center_chunk_coord", center_chunk_coord);
-        bind(texture_spritesheet);
+        bind_texture2D(texture_spritesheet.gl_handle, 3);
 
         uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
         uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
@@ -819,7 +821,5 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     }
 
 
-
-    begin_light_pass(R);
     end_frame(R);
 }
