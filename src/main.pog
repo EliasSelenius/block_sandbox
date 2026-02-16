@@ -26,14 +26,13 @@ include "src/entity.pog";
     - hand held item swing animation
     - hand held item should react to player momentum
 
-    - item max stack count
-    - item durability
-
     - gauss blur in compute shader
 
+    - particles
+        - block damage
+        - block break
 
     TODAY:
-        block break juice
 
 */
 
@@ -125,37 +124,48 @@ enum ToolType {
     Any     = 15; // ToolType.Hand | ToolType.Axe | ToolType.Pickaxe | ToolType.Shovel;
 }
 
-struct Item { ItemIds id; uint32 count; }
+struct Item {
+    ItemIds id;
+    uint32 count;
+    ItemMeta meta;
+}
+
+struct ItemMeta {
+    uint32 durability;
+}
+
 struct ItemInfo {
     char* name;
     Sprite sprite;
     uint32 sprite_index;
+
     ToolType tool;
     uint16 block_id;
+    uint32 max_stack_count;
+    uint32 max_durability;
 }
 
 ItemInfo[] item_infos = {
     {tool = .Hand},
-    {"Stone",        block_id = BlockIds.Stone },
-    {"Soil",         block_id = BlockIds.Soil },
-    {"Grass",        block_id = BlockIds.Grass },
-    {"Gravel",       block_id = BlockIds.Gravel },
-    {"Log",          block_id = BlockIds.Log },
-    {"Leaves",       block_id = BlockIds.Leaves },
-    {"Planks",       block_id = BlockIds.Planks },
-    {"Stone Brick",  block_id = BlockIds.Stone_Brick },
-
-    {"Flint Hatchet", sprite_index = 0, tool = .Axe},
-    {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
-    {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe},
-    {"Rock",          sprite_index = 3 },
-    {"Flint Rock",    sprite_index = 4 },
-    {"Stick",         sprite_index = 5 },
-    {"Plant Fiber",   sprite_index = 6 },
-    {"Dry Fiber",   sprite_index = 7},
-    {"Unlit Torch", sprite_index = 8},
-    {"Lit Torch",   sprite_index = 9},
-    {"Burnt Torch", sprite_index = 10},
+    {"Stone",        block_id = BlockIds.Stone,           max_stack_count = 32 },
+    {"Soil",         block_id = BlockIds.Soil,            max_stack_count = 32 },
+    {"Grass",        block_id = BlockIds.Grass,           max_stack_count = 32 },
+    {"Gravel",       block_id = BlockIds.Gravel,          max_stack_count = 32 },
+    {"Log",          block_id = BlockIds.Log,             max_stack_count = 32 },
+    {"Leaves",       block_id = BlockIds.Leaves,          max_stack_count = 32 },
+    {"Planks",       block_id = BlockIds.Planks,          max_stack_count = 32 },
+    {"Stone Brick",  block_id = BlockIds.Stone_Brick,     max_stack_count = 32 },
+    {"Flint Hatchet", sprite_index = 0, tool = .Axe,      max_stack_count = 1, max_durability=500},
+    {"Wood Shovel",   sprite_index = 1, tool = .Shovel,   max_stack_count = 1, max_durability=500},
+    {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe,  max_stack_count = 1, max_durability=500},
+    {"Rock",          sprite_index = 3,                   max_stack_count = 128},
+    {"Flint Rock",    sprite_index = 4,                   max_stack_count = 32 },
+    {"Stick",         sprite_index = 5,                   max_stack_count = 32 },
+    {"Plant Fiber",   sprite_index = 6,                   max_stack_count = 32 },
+    {"Dry Fiber",     sprite_index = 7,                   max_stack_count = 32 },
+    {"Unlit Torch",   sprite_index = 8,                   max_stack_count = 32 },
+    {"Lit Torch",     sprite_index = 9,                   max_stack_count = 1  },
+    {"Burnt Torch",   sprite_index = 10,                  max_stack_count = 32 },
 };
 
 enum ItemIds {
@@ -286,12 +296,13 @@ void main() {
 
     texture_items_spritesheet = load_texture2D("assets/items.bmp");
     Sprite items_spritesheet = make_sprite(*texture_items_spritesheet);
+    uint32 num_cells = texture_items_spritesheet.width / Block_Pixel_Size;
     for 0 .. item_infos.length {
         let info = *item_infos[it];
         if info.block_id {
             info.sprite = block_infos[info.block_id].sprite;
         } else {
-            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, 4);
+            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, num_cells);
         }
     }
 
@@ -666,6 +677,9 @@ void item_action(Item* item, float32 dt) {
         if tool_swung {
             en.vel = en.vel + d*10;
             en.hp -= min(tool_damage, en.hp);
+
+            damage_item(item, tool_damage);
+
             color_bb = Red;
         }
 
@@ -684,6 +698,8 @@ void item_action(Item* item, float32 dt) {
                 if item_info.tool & drop.tool {
                     Color color_bb = Black;
                     if tool_swung {
+                        damage_item(item, tool_damage);
+
                         if damage_block(target_block.coord, tool_damage) {
                             if target_block.block_id == BlockIds.Log {
                                 // block_update_propegate(target_block.coord, 4);

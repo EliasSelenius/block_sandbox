@@ -56,6 +56,10 @@ bool player_recive_item(Item item) {
     return add_item(*player_hotbar, item) or add_item(*player_backpack, item);
 }
 
+bool player_can_recieve_item(Item item) {
+    return can_add_item(*player_hotbar, item) or can_add_item(*player_backpack, item);
+}
+
 struct BlockDamage {
     ivec3 coord;
     uint32 hp;
@@ -357,6 +361,7 @@ void entity_update(Entity* en, float32 dt) {
     case .Item: {
         rotate(*en.tr, vec3_unit_y, Pi*dt);
 
+        if player_can_recieve_item(en.item_stack)
         if en.cooldown <= 0.0 {
             let player_aabb = effective_aabb(*player_en);
             // let player_feet_pos = player_en.tr.position + player_en.aabb.center - {0, player_en.aabb.size.y/2.0, 0};
@@ -376,7 +381,6 @@ void entity_update(Entity* en, float32 dt) {
                     en.vel = en.vel + {0,-g, 0}*dt + noz(diff)*item_pickup_acceleration*dt;
                 }
             }
-
         }
 
     } break;
@@ -658,7 +662,19 @@ Inventory make_inventory(uint32 rows, cols) {
     return inv;
 }
 
+uint32 stack_inc(Item* item, uint32 amount) {
+    ItemInfo info = item_infos[item.id];
+
+    uint32 old_count = item.count;
+    uint32 new_count = old_count + amount;
+    item.count = min(info.max_stack_count, new_count);
+
+    return new_count - item.count;
+}
+
 void item_count(Item* item, int32 change) {
+    ItemInfo info = item_infos[item.id];
+
     item.count += change;
     if item.count == 0   item.id = 0;
 }
@@ -690,14 +706,36 @@ int32 get_slot_index_for(Inventory* inv, uint32 item_id) {
     return -1;
 }
 
+bool can_add_item(Inventory* inv, Item item) {
+    ItemInfo info = item_infos[item.id];
+
+    for 0 .. inv.rows*inv.cols {
+        Item* slot = *inv.items[it];
+        uint32 space = 0;
+        if slot.id == 0 {
+            space = info.max_stack_count;
+        } else if slot.id == item.id {
+            space = info.max_stack_count - slot.count;
+        } else continue;
+
+        item.count -= min(item.count, space);
+        if item.count == 0 return true;
+    }
+
+    return false;
+}
+
 bool add_item(Inventory* inv, Item item) {
+    ItemInfo info = item_infos[item.id];
+
     for 0 .. inv.rows*inv.cols {
         Item* slot = *inv.items[it];
         if slot.count != 0 and slot.id == item.id {
-            slot.count += item.count;
-            return true;
+            item.count = stack_inc(slot, item.count);
+            if item.count == 0 return true;
         }
     }
+
 
     let slot = get_first_empty_slot(inv);
     if slot {
@@ -747,6 +785,24 @@ bool player_craft(Recipe rec) {
 
     return true;
 }
+
+bool damage_item(Item* item, uint32 dmg) {
+    ItemInfo info = item_infos[item.id];
+    if item.meta.durability == 0 {
+        item.meta.durability = info.max_durability;
+    }
+
+    item.meta.durability -= min(dmg, item.meta.durability);
+    if item.meta.durability == 0 {
+        // break item
+        @item = {};
+        return true;
+    }
+
+    return false;
+}
+
+
 
 struct UI_Slot {
     Item* item;
@@ -858,18 +914,17 @@ void prepare_elements(UI_Rect rect, UI_Slots* slots, Inventory* inv) {
 }
 
 void stack_item(UI_Slot* dst, src) {
-    if dst.item.id == src.item.id {
-        dst.item.count += src.item.count;
-        src.item.count = 0;
-        src.item.id = 0;
-    } else {
-        // Item temp = @dst.item;
-        // @dst.item = @src.item;
-        // @src.item = temp;
-
-        swap(sizeof Item, dst.item, src.item);
+    ItemInfo info = item_infos[dst.item.id];
+    if dst.item.id == src.item.id
+    if src.item.count != info.max_stack_count
+    if dst.item.count != info.max_stack_count
+    {
+        src.item.count = stack_inc(dst.item, src.item.count);
+        if src.item.count == 0  src.item.id = 0;
+        return;
     }
 
+    swap(sizeof Item, dst.item, src.item);
     swap(*dst.pos, *src.pos);
     swap(sizeof uint32, *dst.last_item_count, *src.last_item_count);
 }
@@ -982,7 +1037,7 @@ void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t, tran
     vec4 color_outline = vec4_zero;
     draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
 
-    if item.count > 1 {
+    if item.count != 1 {
 
         Color color_count = White;
 
@@ -1000,6 +1055,16 @@ void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t, tran
 
         draw_text(*static_ui_foreground, center_text(rect_text, glyph_height, text), glyph_height, text, opacity(color_count, 1.0 - count_t));
         draw_text(*static_ui_foreground, center_text(rect_last, glyph_height, last), glyph_height, last, opacity(color_count, count_t));
+    }
+
+    uint32 dura = item.meta.durability;
+    if dura and dura != info.max_durability {
+        float32 prct = dura as float32 / info.max_durability as float32;
+        float32 px = 2.0 / app.window_height;
+        UI_Rect dura_bar_max = child(rect, -1, -1, rect.size.x, 2*px);
+        UI_Rect dura_bar = child(rect, -1, -1, rect.size.x * prct, 2*px);
+        draw_rect(dura_bar_max, Black);
+        draw_rect(dura_bar, Green);
     }
 }
 
@@ -1191,23 +1256,29 @@ bool draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
 
 
     UI_Slot* select = *state.select_slot;
-    bool can_craft = select.item.id == 0 or select.item.id == recipe_current.output.id;
     bool did_craft = false;
 
     if hover(rect_recipe, Input.mouse_pos)
     if mouse_pressed(MouseButton.Left)
-    if can_craft
-    if player_craft(recipe_current)
     {
-        select.item.id = recipe_current.output.id;
-        select.item.count += recipe_current.output.count;
+        Item out = recipe_current.output;
+        ItemInfo info = item_infos[out.id];
 
-        select.pos = rect_recipe.center;
+        bool yields_correct_count = select.item.count + out.count <= info.max_stack_count;
+        bool holding_valid_item = select.item.id == 0 or select.item.id == out.id;
 
-        did_craft = true;
+        if yields_correct_count and holding_valid_item
+        if player_craft(recipe_current) {
+            select.item.id = out.id;
+            select.item.count += out.count;
+
+            select.pos = rect_recipe.center;
+            did_craft = true;
+        }
     }
 
     // state.time_recipe += 5*dt;
     state.time_recipe = exp_decay(state.time_recipe, 0, 15, dt);
     return did_craft;
 }
+
