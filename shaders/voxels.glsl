@@ -187,14 +187,7 @@ void main() {
 
 
 #ifdef FragmentShader ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-#ifdef GPASS
-    layout (location = 0) out vec4 Output_Pos_Metallic;
-    layout (location = 1) out vec4 Output_Normal_Roughness;
-    layout (location = 2) out vec3 Output_Color;
-#else
-    out vec3 FragColor;
-#endif
+out vec3 FragColor;
 
 in IO_Data frag_input;
 
@@ -202,7 +195,7 @@ void main() {
     vec3 ray_origin = u_camera_world_pos;
     vec3 ray = camera_ray(frag_input.ndc);
 
-    { // clamping ray_origin to world bounding box
+    if (true) { // clamping ray_origin to world bounding box
         ivec3 chunk_pool_dim = ivec3(Chunk_Pool_Size, 1, Chunk_Pool_Size);
         vec3 dim = vec3(chunk_pool_dim * Chunk_Size);
         vec3 center = u_center_chunk_coord * Chunk_Size + vec3(float(Chunk_Size)/2.0 - 0.5);
@@ -238,10 +231,6 @@ void main() {
 
     view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, uv_offset, uv_scale, hit.normal);
 
-    // Output_Pos_Metallic     = vec4(view_pos,    metallic);
-    // Output_Normal_Roughness = vec4(view_normal, roughness);
-    // Output_Color            = vec3(albedo);
-    gl_FragDepth = get_fragdepth_from_view_space_point(view_pos);
 
     vec3 sun_world_dir = camera.sun_dir.xyz;
 
@@ -267,6 +256,7 @@ void main() {
     }
 
     FragColor = direct_light + ambient_light;
+    gl_FragDepth = get_fragdepth_from_view_space_point(view_pos);
 }
 #endif
 

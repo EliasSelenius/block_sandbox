@@ -7,11 +7,11 @@ struct Player {
     Stats stats;
 
     Block_Raycast_Result target_block;
-    uint32 target_block_hp;
-    uint32 target_block_max_hp;
 
     float32 tool_charge;
 
+    bool holding_entity;
+    uint32 held_entity_index;
 }
 
 Player player = {
@@ -46,9 +46,9 @@ Inventory player_hotbar = make_inventory(1, 9);
 uint32 hotbar_selected_slot = 0;
 bool player_backpack_open = false;
 
-bool player_holding_entity = false;
-vec3 player_held_entity_offset;
-float32 player_held_entity_distance;
+// bool player_holding_entity = false;
+// vec3 player_held_entity_offset;
+// float32 player_held_entity_distance;
 
 Item* player_held_item() return *player_hotbar.items[hotbar_selected_slot];
 
@@ -56,7 +56,65 @@ bool player_recive_item(Item item) {
     return add_item(*player_hotbar, item) or add_item(*player_backpack, item);
 }
 
+struct BlockDamage {
+    ivec3 coord;
+    uint32 hp;
+    uint16 block_id;
+}
+
+BlockDamage[..] block_damage_data = list_create(sizeof BlockDamage);
+
+BlockDamage* get_block_damage(ivec3 coord) {
+    for 0 .. list_length(block_damage_data) {
+        if equals(block_damage_data[it].coord, coord) {
+            return *block_damage_data[it];
+        }
+    }
+
+    return null;
+}
+
+void set_block_hp(ivec3 coord, uint32 hp) {
+    uint16 block_id = get_block(coord);
+    let info = block_infos[block_id];
+
+    BlockDamage* block_hp = get_block_damage(coord);
+    uint32 actual_hp = block_hp ? block_hp.hp : info.max_hp;
+
+    if hp != actual_hp {
+        if block_hp == null {
+            block_hp = list_append(*block_damage_data);
+            block_hp.coord = coord;
+            block_hp.block_id = block_id;
+        }
+
+        block_hp.hp = hp;
+    }
+}
+
+bool damage_block(ivec3 coord, uint32 dmg) {
+    BlockDamage* block_dmg = get_block_damage(coord);
+
+    if block_dmg == null {
+        block_dmg = list_append(*block_damage_data);
+        block_dmg.coord = coord;
+        block_dmg.block_id = get_block(coord);
+
+        let info = block_infos[block_dmg.block_id];
+        block_dmg.hp = info.max_hp;
+    }
+
+    block_dmg.hp -= min(block_dmg.hp, dmg);
+
+    return block_dmg.hp == 0;
+}
+
 enum Entitykind {
+    Other;
+
+    Freed;
+    Despawn;
+
     Player;
     Item;
     Block;
@@ -92,11 +150,24 @@ struct Particle_Cube {
 
 struct World {
     Entity[..] entity_pool;
+    // Entity* entity_pool;
+    // Entity*[..] free_list;
+    // uint32 entity_count;
 }
 
 World world = {
     entity_pool = list_create(sizeof Entity)
 };
+
+// Entity* new_entity(World* w) {
+//     Entity** en_ptr = list_pop(w.free_list);
+//     Entity* en = null;
+//     if en_ptr  en = @en_ptr;
+
+//     if en == null {
+//         en = arena_alloc()
+//     }
+// }
 
 Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     Entity* en = list_append(*world.entity_pool);
@@ -162,8 +233,18 @@ Entity* spawn_block_entity(vec3 pos, vel, uint16 block_id) {
 Entity* make_block_entity(ivec3 coord) {
     let block_id = get_block(coord);
     if block_id == 0 return null;
+    let info = block_infos[block_id];
+
+    Entity* en = spawn_block_entity(make_vec(coord), vec3_zero, block_id);
+    let block_dmg = get_block_damage(coord);
+    if block_dmg {
+        en.hp = block_dmg.hp;
+    } else {
+        en.hp = info.max_hp;
+    }
+
     set_block(coord, 0);
-    return spawn_block_entity(make_vec(coord), vec3_zero, block_id);
+    return en;
 }
 
 Entity* spawn_bush(vec3 pos) {
@@ -307,6 +388,9 @@ void entity_update(Entity* en, float32 dt) {
     case .Block: {
         BlockInfo info = block_infos[en.block_id];
 
+        Block_Drop drop = info.drops[0];
+        item_drop = {drop.item_id, drop.item_count};
+
         vec3 o = round(en.tr.position);
         vec3 diff = en.tr.position - o;
         ivec3 block_coord = make_ivec(o);
@@ -314,6 +398,7 @@ void entity_update(Entity* en, float32 dt) {
 
         if sqlength(diff) < sq(0.25) and sqlength(en.vel) < sq(0.1) and block_below != 0 {
             set_block(block_coord, en.block_id);
+            set_block_hp(block_coord, en.hp);
             despawn = true;
         }
     } break;
@@ -441,6 +526,20 @@ void draw_x_planes(Sprite sprite, Material_PBR material, mat4 model) {
     draw_quad(sprite, material, m2);
 }
 
+void draw_block_cracks(vec3 pos, uint32 hp, BlockInfo info) {
+    Transform tr = transform_default();
+    tr.position = pos;
+    tr.scale = vec3_one*1.01;
+    mat4 model = to_matrix(tr);
+
+    vec3 albedo = info.color_avg*0.5;
+    Material_PBR mat = {albedo, 0.0, 1.0};
+    let data = draw_cube(sprite_crack, mat, model);
+
+    float32 prct = hp as float32 / info.max_hp;
+    data.albedo_color.w = prct;
+}
+
 /* TODO: thinking about how I want to add physics to items held in hand
 struct Physics {
     vec3 pos, ang, vel, ang_vel;
@@ -483,26 +582,21 @@ void world_draw(DeferredRenderer* R, World* w) {
         draw_quad(info.sprite, mat, model);
     }
 
+    for 0 .. list_length(block_damage_data) {
+        BlockDamage* bd = *block_damage_data[it];
 
-    if player.target_block_hp != player.target_block_max_hp {
-        vec3 pos = make_vec(player.target_block.coord);
-        vec3 prev_pos = make_vec(player.target_block.prev_coord);
+        uint16 block_id = get_block(bd.coord);
+        BlockInfo info = block_infos[block_id];
 
-        BlockInfo info = block_infos[player.target_block.block_id];
+        if bd.hp == 0
+        or block_id != bd.block_id
+        {
+            list_unordered_remove(block_damage_data, it);
+            it--;
+            continue;
+        }
 
-        Transform tr = transform_default();
-        tr.position = pos;
-        tr.scale = vec3_one*1.01;
-        // look_at(*tr, prev_pos);
-
-        mat4 model = to_matrix(tr);
-
-        vec3 albedo = info.color_avg*0.5;
-        Material_PBR mat = {albedo, 0.0, 1.0};
-        let data = draw_cube(sprite_crack, mat, model);
-
-        float32 prct = player.target_block_hp as float32 / player.target_block_max_hp;
-        data.albedo_color.w = prct;
+        draw_block_cracks(make_vec(bd.coord), bd.hp, info);
     }
 
 
@@ -530,10 +624,13 @@ void world_draw(DeferredRenderer* R, World* w) {
         case .Player: {
             draw_cube(make_sprite(*white_texture), mat, model);
         } break;
+
         case .Block: {
             BlockInfo info = block_infos[en.block_id];
             draw_cube(info.sprite, mat, model);
+            draw_block_cracks(en.tr.position, en.hp, info);
         } break;
+
         case .Bush: {
             draw_x_planes(sprite_bush, mat, mat4_scale(1, 1, 1) * model);
         } break;
@@ -989,7 +1086,7 @@ void draw_inventory() {
             let d = camera_ray(world_cam, Input.mouse_pos);
 
             spawn_item(o,d*4, @select.item, 3);
-            @select.item = {}
+            @select.item = {};
         }
 
         float32 item_scale = 1.5;

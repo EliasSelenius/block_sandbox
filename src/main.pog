@@ -26,8 +26,6 @@ include "src/entity.pog";
     - hand held item swing animation
     - hand held item should react to player momentum
 
-    - block breaking durability
-
     - item max stack count
     - item durability
 
@@ -88,19 +86,21 @@ struct BlockInfo {
     Sprite sprite;
     vec3 color_avg;
 
+    uint32 max_hp;
+
     Block_Drop[] drops;
 }
 
 BlockInfo[] block_infos = {
     {"Air"},
-    {"Stone",        "stone.bmp",       drops={{.Pickaxe, .Rock, 4}                        }},
-    {"Soil",         "soil.bmp",        drops={{.Shovel,  .Soil}                           }},
-    {"Grass",        "grass.bmp",       drops={{.Shovel,  .Grass}                          }},
-    {"Gravel",       "gravel.bmp",      drops={{.Hand,    .Flint_Rock}, {.Shovel, .Gravel} }},
-    {"Log",          "log.bmp",         drops={{.Axe,     .Log}                            }},
-    {"Leaves",       "leaves.bmp",      drops={{.Any,     .Stick}                          }},
-    {"Planks",       "Planks.bmp",      drops={{.Axe,     .Planks}                         }},
-    {"Stone Brick",  "Stone_Brick.bmp", drops={{.Pickaxe, .Stone_Brick}                    }}
+    {"Stone",        "stone.bmp",       max_hp = 40, drops={{.Pickaxe, .Rock, 4}                        }},
+    {"Soil",         "soil.bmp",        max_hp = 15, drops={{.Shovel,  .Soil}                           }},
+    {"Grass",        "grass.bmp",       max_hp = 20, drops={{.Shovel,  .Grass}                          }},
+    {"Gravel",       "gravel.bmp",      max_hp = 15, drops={{.Hand,    .Flint_Rock}, {.Shovel, .Gravel} }},
+    {"Log",          "log.bmp",         max_hp = 30, drops={{.Axe,     .Log}                            }},
+    {"Leaves",       "leaves.bmp",      max_hp = 10, drops={{.Any,     .Stick}                          }},
+    {"Planks",       "Planks.bmp",      max_hp = 30, drops={{.Axe,     .Planks}                         }},
+    {"Stone Brick",  "Stone_Brick.bmp", max_hp = 30, drops={{.Pickaxe, .Stone_Brick}                    }},
 };
 
 enum BlockIds {
@@ -134,8 +134,6 @@ struct ItemInfo {
     uint16 block_id;
 }
 
-
-
 ItemInfo[] item_infos = {
     {tool = .Hand},
     {"Stone",        block_id = BlockIds.Stone },
@@ -145,7 +143,7 @@ ItemInfo[] item_infos = {
     {"Log",          block_id = BlockIds.Log },
     {"Leaves",       block_id = BlockIds.Leaves },
     {"Planks",       block_id = BlockIds.Planks },
-    {"Stone_Brick",  block_id = BlockIds.Stone_Brick },
+    {"Stone Brick",  block_id = BlockIds.Stone_Brick },
 
     {"Flint Hatchet", sprite_index = 0, tool = .Axe},
     {"Wood Shovel",   sprite_index = 1, tool = .Shovel},
@@ -153,9 +151,11 @@ ItemInfo[] item_infos = {
     {"Rock",          sprite_index = 3 },
     {"Flint Rock",    sprite_index = 4 },
     {"Stick",         sprite_index = 5 },
-    {"Plant Fiber",   sprite_index = 6 }
-
-
+    {"Plant Fiber",   sprite_index = 6 },
+    {"Dry Fiber",   sprite_index = 7},
+    {"Unlit Torch", sprite_index = 8},
+    {"Lit Torch",   sprite_index = 9},
+    {"Burnt Torch", sprite_index = 10},
 };
 
 enum ItemIds {
@@ -176,6 +176,10 @@ enum ItemIds {
     Flint_Rock;
     Stick;
     Plant_Fiber;
+    Dry_Fiber;
+    Unlit_Torch;
+    Lit_Torch;
+    Burnt_Torch;
 }
 
 struct Recipe {
@@ -184,12 +188,15 @@ struct Recipe {
 }
 
 Recipe[] recipes = {
-    { output={.Flint_Hatchet, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Plant_Fiber, 1}} },
-    { output={.Flint_Pickaxe, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Plant_Fiber, 1}} },
-    { output={.Wood_Shovel,   1}, input={{.Stick, 1}, {.Log, 1}, {.Plant_Fiber, 2}}},
+    { output={.Flint_Hatchet, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Dry_Fiber, 1}} },
+    { output={.Flint_Pickaxe, 1}, input={{.Flint_Rock, 1}, {.Stick, 1}, {.Dry_Fiber, 1}} },
+    { output={.Wood_Shovel,   1}, input={{.Stick, 2}, {.Log, 1}} },
     { output={.Stone,         1}, input={{.Rock, 4}} },
     { output={.Planks,        1}, input={{.Log, 1}} },
-    { output={.Stone_Brick,   1}, input={{.Stone, 1}} }
+    { output={.Stone_Brick,   1}, input={{.Stone, 1}} },
+    { output={.Dry_Fiber,     1}, input={{.Plant_Fiber, 1}} },
+    { output={.Unlit_Torch,   1}, input={{.Dry_Fiber, 1},{.Stick, 1}} },
+    { output={.Lit_Torch,     1}, input={{.Unlit_Torch, 1}} },
 };
 
 Sprite sub_sprite(Sprite sp, uint32 sprite_index, sprite_pixel_size, num_cells) {
@@ -538,19 +545,42 @@ void player_control(float32 dt) {
             rotate(*world_cam.transform, vec3_unit_y,               Input.mouse_delta.x * 2.0);
         }
 
+        vec2 cursor_pos = cursor_enabled() ? Input.mouse_pos : vec2_zero;
+        update_matrices(*world_cam);
+        let o = world_cam.transform.position;
+        let d = camera_ray(world_cam, cursor_pos);
 
-        Item* item_hand = player_held_item();
-        if is_item(@item_hand) {
-            if key_pressed(key_drop_item) {
-                vec3 look_dir = forward(world_cam.transform); // forward(player_en.tr);
-                Item item = {item_hand.id, 1};
-                spawn_item(player_en.tr.position, look_dir*4, item, 3);
+        if player.holding_entity {
+            Entity* en = *world.entity_pool[player.held_entity_index];
 
-                item_count(item_hand, -1);
+            vec3 pos = o + d*2.5;
+            // en.tr.position = move(en.tr.position, pos, 10);
+
+            let prop = pos - en.tr.position;
+            let acc = prop*100.0 - en.vel*10.0;
+            en.vel = en.vel + acc*dt;
+
+            if mouse_pressed(mouse_primary_action) {
+                player.holding_entity = false;
+            } else if mouse_pressed(mouse_secondary_action) {
+                player.holding_entity = false;
+                en.vel = en.vel + d*10.0;
             }
-        }
 
-        item_action(item_hand, dt);
+        } else {
+            Item* item_hand = player_held_item();
+            if is_item(@item_hand) {
+                if key_pressed(key_drop_item) {
+                    vec3 look_dir = forward(world_cam.transform); // forward(player_en.tr);
+                    Item item = {item_hand.id, 1};
+                    spawn_item(player_en.tr.position, look_dir*4, item, 3);
+
+                    item_count(item_hand, -1);
+                }
+            }
+
+            item_action(item_hand, dt);
+        }
     }
 
     vec2 input = player_backpack_open ? {0,0} : Input.wasd;
@@ -589,22 +619,20 @@ void item_action(Item* item, float32 dt) {
     float32 reach = 3.5;
     let target_block = grid_raycast(o,d, reach);
     let target_entity = entity_raycast(*world, o,d, reach);
-
-    if !equals(player.target_block.coord, target_block.coord) {
-        player.target_block_max_hp = 30;
-        player.target_block_hp = player.target_block_max_hp;
-    }
     player.target_block = target_block;
 
     bool tool_swung = false;
     float32 tool_swing_power = 0;
 
     if item_info.tool {
-        if mouse_down(mouse_primary_action) { // use tool
+        if player.tool_charge < 1.0 and mouse_down(mouse_primary_action) {
             player.tool_charge = clamp01(player.tool_charge + 4*dt);
-        } else if mouse_released(mouse_primary_action) {
+        } else {
             tool_swing_power = player.tool_charge;
             player.tool_charge = 0;
+        }
+
+        if tool_swing_power > 0.0 {
             tool_swung = true;
         }
     }
@@ -624,29 +652,15 @@ void item_action(Item* item, float32 dt) {
         Entity* en = target_entity.en;
 
         bool can_hold = item.id == 0;
-        bool holding = can_hold and mouse_down(mouse_primary_action);
-
-        if player_holding_entity {
-            if holding {
-
-                en.tr.position = o + d*player_held_entity_distance - player_held_entity_offset;
-                en.vel.y += 9.8*dt;
-
-            } else {
-                player_holding_entity = false;
+        if can_hold {
+            if mouse_pressed(mouse_primary_action) {
+                player.holding_entity = true;
+                // player.held_entity_index = ((en - world.entity_pool) as uint64 / sizeof Entity) as uint32;
+                player.held_entity_index = (en - world.entity_pool) as uint32;
             }
-        } else {
-            if holding {
-                player_holding_entity = true;
-                player_held_entity_offset = target_entity.hit_point - en.tr.position;
-                player_held_entity_distance = target_entity.min_dist;
-            }
+
+            gizmo_point(target_entity.hit_point, Cyan, 0.05);
         }
-
-        Color color_hit_point = Blue;
-        if holding  color_hit_point = Red;
-        if can_hold gizmo_point(target_entity.hit_point, color_hit_point, 0.05);
-
 
         Color color_bb = White;
         if tool_swung {
@@ -670,15 +684,16 @@ void item_action(Item* item, float32 dt) {
                 if item_info.tool & drop.tool {
                     Color color_bb = Black;
                     if tool_swung {
-                        player.target_block_hp -= min(tool_damage, player.target_block_hp);
+                        if damage_block(target_block.coord, tool_damage) {
+                            if target_block.block_id == BlockIds.Log {
+                                // block_update_propegate(target_block.coord, 4);
+                                fell_tree(target_block.coord);
+                            }
 
-                        if player.target_block_hp == 0 {
                             set_block(target_block.coord, 0);
 
                             Item item_drop = {drop.item_id, max(drop.item_count, 1)};
                             spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
-
-                            block_update_propegate(target_block.coord, 4);
                         }
 
                         color_bb = Red;
@@ -695,18 +710,19 @@ void item_action(Item* item, float32 dt) {
                 set_block(target_block.prev_coord, item_info.block_id);
                 item_count(item, -1);
             }
-        } else {
-            if mouse_pressed(mouse_primary_action) {
-                let block_en = make_block_entity(target_block.coord);
-                block_en.tr.position.y += 0.3;
-
-                vec3 block_hit_point = o + d*target_block.dist;
-
-                player_holding_entity = true;
-                player_held_entity_offset = block_hit_point - block_en.tr.position;
-                player_held_entity_distance = target_block.dist;
-            }
         }
+        // else {
+        //     if mouse_pressed(mouse_primary_action) {
+        //         let block_en = make_block_entity(target_block.coord);
+        //         block_en.tr.position.y += 0.3;
+
+        //         vec3 block_hit_point = o + d*target_block.dist;
+
+        //         player_holding_entity = true;
+        //         player_held_entity_offset = block_hit_point - block_en.tr.position;
+        //         player_held_entity_distance = target_block.dist;
+        //     }
+        // }
     }
 
 }
@@ -727,9 +743,37 @@ void block_update_propegate(ivec3 coord, uint32 layer) {
     block_update_propegate(coord + { 0, 1,-1}, layer);
 }
 
+void fell_tree(ivec3 coord) {
+    void fell_tree_recurse(ivec3[..]* coords, ivec3 coord) {
+        int32 i = index_of(@coords, *coord);
+        if i != -1 return;
+
+        if get_block(coord) == BlockIds.Log {
+            list_add(coords, *coord);
+
+            fell_tree_recurse(coords, coord + { 1, 0, 0});
+            fell_tree_recurse(coords, coord + {-1, 0, 0});
+            fell_tree_recurse(coords, coord + { 0, 1, 0});
+            fell_tree_recurse(coords, coord + { 0,-1, 0});
+            fell_tree_recurse(coords, coord + { 0, 0, 1});
+            fell_tree_recurse(coords, coord + { 0, 0,-1});
+        }
+    }
+
+    ivec3[..] coords = list_create(sizeof ivec3);
+    fell_tree_recurse(*coords, coord);
+
+    for 1 .. list_length(coords) {
+        let en = make_block_entity(coords[it]);
+        en.vel = random_unit_vec3();
+    }
+
+    list_delete(coords);
+}
+
 void draw_frame(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
-    R.sun_dir = { cos(time), 0.7, sin(time) };
+    R.sun_dir = noz(make_vec(cosf(time), 0.7, sinf(time)));
     // R.sun_dir = noz(forward(cam.transform));
 
     begin_geometry_pass(R, cam);

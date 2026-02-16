@@ -233,6 +233,9 @@ void set_line_segment(Chunk* chunk, vec3 start, end, BlockIds block_id) {
     }
 }
 
+
+
+
 void add_quad(Mesh* m, vec3 p, ivec3 inorm, vec2 uv_offset, uv_scale) {
     uint32 i = list_length(m.vertices);
     add_tri(m, i+1, i+2, i+0);
@@ -460,5 +463,57 @@ Octree_Node* draw_octree(uint32 level, vec3 pos, float32 size, Octree_Node* node
         let xyz = draw_octree(level+1, pos + make_vec(-q, q, q), s, yz);
         return    draw_octree(level+1, pos + make_vec( q, q, q), s, xyz);
     }
+}
+
+
+
+struct Tree64_Node {
+    uint64 mask;
+    uint16 block_id;
+}
+
+bool is_leaf(Tree64_Node node) return node.mask == 0;
+
+
+
+uint32 bit_count(uint8 num) {
+    uint32[16] bit4_count_lookup = {
+        /*0000*/  0,
+        /*0001*/  1,
+        /*0010*/  1,
+        /*0011*/  2,
+        /*0100*/  1,
+        /*0101*/  2,
+        /*0110*/  2,
+        /*0111*/  3,
+        /*1000*/  1,
+        /*1001*/  2,
+        /*1010*/  2,
+        /*1011*/  3,
+        /*1100*/  2,
+        /*1101*/  3,
+        /*1110*/  3,
+        /*1111*/  4
+    };
+
+    return bit4_count_lookup[num&0xF0 >> 4] + bit4_count_lookup[num&0x0F];
+}
+
+uint32 bit_count(uint16 num) {
+    uint8 b0 = (num&0x00_FF)      as uint8;
+    uint8 b1 = (num&0xFF_00 >> 8) as uint8;
+    return bit_count(b0) + bit_count(b1);
+}
+
+uint32 bit_count(uint32 num) {
+    uint16 b0 = (num&0x0000_FFFF)       as uint16;
+    uint16 b1 = (num&0xFFFF_0000 >> 16) as uint16;
+    return bit_count(b0) + bit_count(b1);
+}
+
+uint32 bit_count(uint64 num) {
+    uint32 b0 = (num&0x00000000_FFFFFFFF)       as uint32;
+    uint32 b1 = (num&0xFFFFFFFF_00000000 >> 32) as uint32;
+    return bit_count(b0) + bit_count(b1);
 }
 
