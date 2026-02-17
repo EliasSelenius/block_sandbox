@@ -123,6 +123,7 @@ enum Entitykind {
     Item;
     Block;
     Bush;
+    Torch;
 }
 
 struct Entity {
@@ -271,6 +272,36 @@ Entity* spawn_bush(vec3 pos) {
     return en;
 }
 
+Entity* spawn_torch(vec3 pos) {
+    Entity* en = list_append(*world.entity_pool);
+    @en = {};
+    en.kind = .Torch;
+
+    en.tr = transform_default();
+    en.tr.position = pos;
+
+
+    Sprite sp = item_infos[ItemIds.Unlit_Torch].sprite;
+    // ivec2 px = get_sprite_pixel_size(sp);
+
+    ivec2 px = { 4, 15 };
+    vec3 size = make_vec(px.x, px.y, px.x) / Block_Pixel_Size;
+    en.tr.scale = vec3_one;
+    en.aabb = {vec3_zero, size};
+
+    en.hp = 10;
+    en.grid_aligned = true;
+
+    en.item_stack = {.Unlit_Torch, 1};
+    en.cooldown = 4;
+
+    en.mass = 1.0;
+    en.bounciness = 0.0;
+    en.cof_k = 1.0;
+    en.cof_s = 1.2 * en.cof_k;
+    return en;
+}
+
 Box effective_aabb(Entity* en) {
     Box box = en.aabb;
     box.center = box.center + en.tr.position;
@@ -409,6 +440,16 @@ void entity_update(Entity* en, float32 dt) {
 
     case .Bush: {
         item_drop = { .Plant_Fiber, 1 };
+    } break;
+
+    case .Torch: {
+        if en.item_stack.id == ItemIds.Lit_Torch {
+            if en.cooldown <= 0.0 {
+                en.item_stack.id = .Burnt_Torch;
+            }
+        }
+
+        item_drop = en.item_stack;
     } break;
     }
 
@@ -615,10 +656,10 @@ void world_draw(DeferredRenderer* R, World* w) {
         Material_PBR mat      = {{1,1,1}, 0.1, 0.1};
         Material_PBR mat_bush = {{1,1,1}, 0.0, 0.5};
 
+        ItemInfo info = item_infos[en.item_stack.id];
 
         switch (en.kind) {
         case .Item: {
-            ItemInfo info = item_infos[en.item_stack.id];
             draw_shadow(en.tr.position, (en.tr.scale * en.aabb.size).x);
 
             if info.block_id   draw_cube(info.sprite, mat, model);
@@ -636,7 +677,12 @@ void world_draw(DeferredRenderer* R, World* w) {
         } break;
 
         case .Bush: {
-            draw_x_planes(sprite_bush, mat, mat4_scale(1, 1, 1) * model);
+            draw_x_planes(sprite_bush, mat_bush, mat4_scale(1, 1, 1) * model);
+        } break;
+
+        case .Torch: {
+            // draw_cube(info.sprite, mat, model);
+            draw_x_planes(info.sprite, mat, mat4_scale(1, 1, 1) * model);
         } break;
         }
     }

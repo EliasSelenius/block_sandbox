@@ -229,6 +229,72 @@ vec3 calc_avg_color(Image image) {
     return res / num_pixels as float32;
 }
 
+void reload_sprites() {
+    texture_delete(*texture_spritesheet);
+    texture_delete(*texture_items_spritesheet);
+    texture_delete(*texture_bush);
+    texture_delete(*texture_crack);
+
+
+
+    uint32 ss_size = (floorf(sqrtf(block_infos.length as float32)) + 1) as uint32;
+    Image spritesheet = {};
+    spritesheet.width = ss_size * Block_Pixel_Size;
+    spritesheet.height = ss_size * Block_Pixel_Size;
+    spritesheet.pixels = calloc(spritesheet.width * spritesheet.height, sizeof Color);
+
+    for 0 .. block_infos.length {
+        let bi = *block_infos[it];
+        if bi.image_file_name {
+            if bi.image.pixels free(bi.image.pixels);
+            bi.image = load_bitmap(concat("assets/", bi.image_file_name));
+
+            uint32 x = (it % ss_size) * Block_Pixel_Size;
+            uint32 y = (it / ss_size) * Block_Pixel_Size;
+
+            image_blit(spritesheet, bi.image, x, y);
+
+            bi.color_avg = calc_avg_color(bi.image);
+        }
+    }
+
+    texture_spritesheet = create_texture2D(spritesheet);
+    set_filter(texture_spritesheet, TextureFilter.nearest);
+    free(spritesheet.pixels);
+
+    for 0 .. block_infos.length {
+        let bi = *block_infos[it];
+        if bi.image_file_name {
+            bi.sprite.tex = *texture_spritesheet;
+
+            float32 f = Block_Pixel_Size as float32 / spritesheet.width;
+            bi.sprite.uv_offset = make_vec(it % ss_size, it / ss_size) * f;
+            bi.sprite.uv_scale = {f,f};
+        }
+    }
+
+
+
+
+    texture_items_spritesheet = load_texture2D("assets/items.bmp");
+    Sprite items_spritesheet = make_sprite(*texture_items_spritesheet);
+    uint32 num_cells = texture_items_spritesheet.width / Block_Pixel_Size;
+    for 0 .. item_infos.length {
+        let info = *item_infos[it];
+        if info.block_id {
+            info.sprite = block_infos[info.block_id].sprite;
+        } else {
+            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, num_cells);
+        }
+    }
+
+    texture_bush = load_texture2D("assets/bush.bmp");
+    sprite_bush = make_sprite(*texture_bush);
+
+    texture_crack = load_texture2D("assets/crack.bmp");
+    sprite_crack = make_sprite(*texture_crack);
+}
+
 void main() {
     grax_init();
     gizmo_setup();
@@ -259,59 +325,6 @@ void main() {
         db_quad3D = create_draw_buffers(verts, inds);
     }
 
-    uint32 ss_size = (floorf(sqrtf(block_infos.length as float32)) + 1) as uint32;
-    Image spritesheet = {};
-    spritesheet.width = ss_size * Block_Pixel_Size;
-    spritesheet.height = ss_size * Block_Pixel_Size;
-    spritesheet.pixels = calloc(spritesheet.width * spritesheet.height, sizeof Color);
-
-    for 0 .. block_infos.length {
-        let bi = *block_infos[it];
-        if bi.image_file_name {
-            bi.image = load_bitmap(concat("assets/", bi.image_file_name));
-
-            uint32 x = (it % ss_size) * Block_Pixel_Size;
-            uint32 y = (it / ss_size) * Block_Pixel_Size;
-
-            image_blit(spritesheet, bi.image, x, y);
-
-            bi.color_avg = calc_avg_color(bi.image);
-        }
-    }
-
-    texture_spritesheet = create_texture2D(spritesheet);
-    set_filter(texture_spritesheet, TextureFilter.nearest);
-    free(spritesheet.pixels);
-
-    for 0 .. block_infos.length {
-        let bi = *block_infos[it];
-        if bi.image_file_name {
-            bi.sprite.tex = *texture_spritesheet;
-
-            float32 f = Block_Pixel_Size as float32 / spritesheet.width;
-            bi.sprite.uv_offset = make_vec(it % ss_size, it / ss_size) * f;
-            bi.sprite.uv_scale = {f,f};
-        }
-    }
-
-    texture_items_spritesheet = load_texture2D("assets/items.bmp");
-    Sprite items_spritesheet = make_sprite(*texture_items_spritesheet);
-    uint32 num_cells = texture_items_spritesheet.width / Block_Pixel_Size;
-    for 0 .. item_infos.length {
-        let info = *item_infos[it];
-        if info.block_id {
-            info.sprite = block_infos[info.block_id].sprite;
-        } else {
-            info.sprite = sub_sprite(items_spritesheet, info.sprite_index, Block_Pixel_Size, num_cells);
-        }
-    }
-
-    texture_bush = load_texture2D("assets/bush.bmp");
-    sprite_bush = make_sprite(*texture_bush);
-
-    texture_crack = load_texture2D("assets/crack.bmp");
-    sprite_crack = make_sprite(*texture_crack);
-
     {
         let m = mesh_create();
         vec3 center = {};
@@ -329,6 +342,8 @@ void main() {
         db_cube = create_draw_buffers(m);
         mesh_free(m);
     }
+
+    reload_sprites();
 
     shader_voxel_chunk = load_shader("shaders/voxels.glsl");
 
@@ -360,6 +375,8 @@ void main() {
             rl(*ui_shader);
             rl(*shader_voxel_chunk);
             rl(*R.shader_dirlight);
+
+            reload_sprites();
         }
 
         if key_pressed(Key.escape) {
@@ -440,6 +457,7 @@ struct Block_Raycast_Result {
     ivec3 coord, prev_coord;
     uint16 block_id;
     float32 dist;
+    vec3 hit_pos;
 }
 
 Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
@@ -458,6 +476,7 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
             result.dist = dist;
             result.coord = ts.coord;
             result.prev_coord = prev_coord;
+            result.hit_pos = o + dist*d;
             return result;
         }
 
@@ -726,6 +745,16 @@ void item_action(Item* item, float32 dt) {
                 set_block(target_block.prev_coord, item_info.block_id);
                 item_count(item, -1);
             }
+        } else if item.id == .Unlit_Torch or item.id == .Lit_Torch or item.id == .Burnt_Torch {
+            vec3 pos = target_block.hit_pos;
+            gizmo_point(pos, Black, 0.05);
+
+            if mouse_pressed(mouse_secondary_action) {
+                let en = spawn_torch(pos);
+                en.item_stack = {item.id, 1};
+                en.tr.position.y += en.tr.scale.y/2.0;
+                item_count(item, -1);
+            }
         }
         // else {
         //     if mouse_pressed(mouse_primary_action) {
@@ -789,8 +818,10 @@ void fell_tree(ivec3 coord) {
 
 void draw_frame(DeferredRenderer* R, Camera cam) {
     let time = app.total_run_time / 10.0;
-    R.sun_dir = noz(make_vec(cosf(time), 0.7, sinf(time)));
+    // R.sun_dir = noz(make_vec(cosf(time), 0.7, sinf(time)));
     // R.sun_dir = noz(forward(cam.transform));
+
+    R.sun_dir = noz(make_vec(1,0.7,0.01));
 
     begin_geometry_pass(R, cam);
 
