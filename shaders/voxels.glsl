@@ -115,6 +115,34 @@ Voxel_Traversal_State traverse(Voxel_Traversal_State ts) {
     return ts;
 }
 
+struct Ray_AABB_Hit {
+    vec2 dists;
+    ivec3 normal;
+};
+
+Ray_AABB_Hit ray_aabb_intersects_ex(vec3 o, vec3 r, vec3 l, vec3 h) {
+    vec3 t_low  = (l - o) / r;
+    vec3 t_high = (h - o) / r;
+    vec3 t_close = min(t_low, t_high);
+    vec3 t_far   = max(t_low, t_high);
+
+    Ray_AABB_Hit hit;
+    hit.dists.y = min_axis(t_far);
+
+    if (t_close.x > t_close.y && t_close.x > t_close.z) {
+        hit.normal = ivec3(1,0,0);
+        hit.dists.x = t_close.x;
+    } else if (t_close.y > t_close.z) {
+        hit.normal = ivec3(0,1,0);
+        hit.dists.x = t_close.y;
+    } else {
+        hit.normal = ivec3(0,0,1);
+        hit.dists.x = t_close.z;
+    }
+
+    return hit;
+}
+
 vec2 ray_aabb_intersects(vec3 o, vec3 r, vec3 l, vec3 h) {
     vec3 t_low  = (l - o) / r;
     vec3 t_high = (h - o) / r;
@@ -124,40 +152,88 @@ vec2 ray_aabb_intersects(vec3 o, vec3 r, vec3 l, vec3 h) {
     return vec2(max_axis(t_close), min_axis(t_far));
 }
 
+ivec2 spritesheet_dimensions;
+vec2 uv_scale;
+
+vec2 calc_uv_offset(int block_id) {
+    int ss_size = spritesheet_dimensions.x;
+    vec2 uv_offset = vec2(block_id % ss_size, block_id / ss_size) * uv_scale;
+    return uv_offset;
+}
+
 struct HitInfo {
+    ivec3 coord;
+
     vec2 uv;
+    
+
     vec3 hit_pos;
     vec3 normal;
     vec2 dist;
     int block_id;
+    vec3 albedo;
 };
 
 HitInfo raycast(vec3 o, vec3 d) {
+
+    int block_id_leaves = 6;
+
     Voxel_Traversal_State state = start_traversal(o, d);
     for (int i = 0; i < 1024; i++) {
         ivec3 prev_coord = state.coord;
         state = traverse(state);
 
+        vec2 dists = travel_distance(state);
+        vec3 hit_pos = o + d * dists.x;
+
         int block_id = get_block(state.coord);
-
         if (block_id < 0) break;
+        if (block_id == 0) continue;
 
-        if (block_id != 0) {
-            HitInfo hit;
-            hit.dist = travel_distance(state);
-            hit.hit_pos = o + d*hit.dist.x;
+        ivec3 inorm;
+        vec3 uv3d;
 
-            vec3 f = fract(hit.hit_pos);
-            ivec3 inorm = prev_coord - state.coord;
+        if (block_id == 100) {
+            float box_size = 0.5;
+            vec3 c = vec3(state.coord);
+            vec3 l = c - vec3(box_size/2.0);
+            vec3 h = c + vec3(box_size/2.0);
 
-                 if (bool(inorm.x)) hit.uv = f.yz;
-            else if (bool(inorm.y)) hit.uv = f.xz;
-            else if (bool(inorm.z)) hit.uv = f.xy;
+            Ray_AABB_Hit aabb_hit = ray_aabb_intersects_ex(hit_pos, d, l,h);
+            float close = aabb_hit.dists.x;
+            float far   = aabb_hit.dists.y;
 
-            hit.normal = vec3(inorm);
-            hit.block_id = block_id;
-            return hit;
+            if (close <= 0.0 || close > far) continue;
+
+            hit_pos = hit_pos + d*close;
+            uv3d = fract(hit_pos / box_size);
+            inorm = aabb_hit.normal;
+
+        } else {
+
+            uv3d = fract(hit_pos);
+            inorm = prev_coord - state.coord;
         }
+
+        vec2 uv;
+
+             if (bool(inorm.x)) uv = uv3d.yz;
+        else if (bool(inorm.y)) uv = uv3d.xz;
+        else if (bool(inorm.z)) uv = uv3d.xy;
+
+        vec2 uv_offset = calc_uv_offset(block_id);
+        vec4 tex_color = texture(u_spritesheet, uv_offset + uv * uv_scale);
+        if (tex_color.a == 0.0) continue;
+
+        HitInfo hit;
+        hit.coord = state.coord;
+        hit.uv = uv;
+        hit.hit_pos = hit_pos;
+        hit.normal = vec3(inorm);
+        hit.dist = dists;
+        hit.block_id = block_id;
+        hit.albedo = tex_color.rgb;
+        return hit;
     }
 
     HitInfo hit;
@@ -192,6 +268,11 @@ out vec3 FragColor;
 in IO_Data frag_input;
 
 void main() {
+
+    spritesheet_dimensions = textureSize(u_spritesheet, 0) / Block_Pixel_Size;
+    uv_scale = vec2(1.0) / spritesheet_dimensions;
+
+
     vec3 ray_origin = u_camera_world_pos;
     vec3 ray = camera_ray(frag_input.ndc);
 
@@ -217,26 +298,20 @@ void main() {
     if (hit.block_id == 0) discard;
 
     vec3 view_pos = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
-    vec3 view_normal = mat3(camera.view) * hit.normal;
+    // vec3 view_normal = mat3(camera.view) * hit.normal;
+    vec3 view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
 
+    vec3 albedo = hit.albedo;
     float metallic = 0.1;
     float roughness = 0.1;
-
-    int ss_size = textureSize(u_spritesheet, 0).x / Block_Pixel_Size;
-    vec2 uv_scale = vec2(1.0 / float(ss_size));
-    vec2 uv_offset = vec2(hit.block_id % ss_size, hit.block_id / ss_size) * uv_scale;
-
-    vec2 uv = uv_offset + hit.uv * uv_scale;
-    vec3 albedo = texture(u_spritesheet, uv).rgb;
-
-    view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, uv_offset, uv_scale, hit.normal);
-
 
     vec3 sun_world_dir = camera.sun_dir.xyz;
 
     LightRay light;
     light.dir = mat3(camera.view) * sun_world_dir;
     light.radiance = camera.sun_radiance.xyz;
+    float sun_ambient_factor = camera.sun_radiance.w;
+    vec3 ambient_radiance = light.radiance * sun_ambient_factor;
 
     Geometry geom;
     geom.view_pos    = view_pos;
@@ -246,16 +321,20 @@ void main() {
     geom.roughness   = roughness;
     geom.metallic    = metallic;
 
-    vec3 ambient_light = albedo * light.radiance * camera.sun_radiance.w;
-    vec3 direct_light = cook_torrance_BRDF(light, geom);
+    vec3 d = sun_world_dir;
+    vec3 o = hit.hit_pos;
+    HitInfo sun_hit = raycast(o, d);
 
-    HitInfo sun_hit = raycast(hit.hit_pos, camera.sun_dir.xyz);
-    if (sun_hit.block_id != 0) {
-        float factor = sun_hit.dist.x / 10.0;
-        direct_light *= smoothstep(0.2, 0.8, clamp(factor, 0,1));
+    if (sun_hit.block_id != 0 || dot(hit.normal, d) <= 0.0) {
+        // float factor = sun_hit.dist.x / 10.0;
+        // direct_light *= smoothstep(0.2, 0.8, clamp(factor, 0,1));
+        FragColor = albedo * ambient_radiance;
+    } else {
+        vec3 ambient_light = albedo * ambient_radiance;
+        vec3 direct_light = cook_torrance_BRDF(light, geom);
+        FragColor = direct_light + ambient_light;
     }
 
-    FragColor = direct_light + ambient_light;
     gl_FragDepth = get_fragdepth_from_view_space_point(view_pos);
 }
 #endif
