@@ -32,6 +32,12 @@ include "src/entity.pog";
         - block damage
         - block break
 
+    - player health bar
+    - bery bush and consumable
+    - death/respawn mechanic
+
+    - day/night cycle
+
     TODAY:
 
 */
@@ -94,24 +100,26 @@ BlockInfo[] block_infos = {
     {"Air"},
     {"Stone",        "stone.bmp",       max_hp = 40, drops={{.Pickaxe, .Rock, 4}                        }},
     {"Soil",         "soil.bmp",        max_hp = 15, drops={{.Shovel,  .Soil}                           }},
-    {"Grass",        "grass.bmp",       max_hp = 20, drops={{.Shovel,  .Grass}                          }},
+    {"Turf",         "turf.bmp",        max_hp = 20, drops={{.Shovel,  .Turf}                           }},
     {"Gravel",       "gravel.bmp",      max_hp = 15, drops={{.Hand,    .Flint_Rock}, {.Shovel, .Gravel} }},
     {"Log",          "log.bmp",         max_hp = 30, drops={{.Axe,     .Log}                            }},
     {"Leaves",       "leaves.bmp",      max_hp = 10, drops={{.Any,     .Stick}                          }},
-    {"Planks",       "Planks.bmp",      max_hp = 30, drops={{.Axe,     .Planks}                         }},
-    {"Stone Brick",  "Stone_Brick.bmp", max_hp = 30, drops={{.Pickaxe, .Stone_Brick}                    }},
+    {"Planks",       "planks.bmp",      max_hp = 30, drops={{.Axe,     .Planks}                         }},
+    {"Stone Brick",  "stone_brick.bmp", max_hp = 30, drops={{.Pickaxe, .Stone_Brick}                    }},
+    {"Grass",        "grass.bmp",       max_hp = 4,  drops={{.Any,     .Grass}                          }},
 };
 
 enum BlockIds {
     Air;
     Stone;
     Soil;
-    Grass;
+    Turf;
     Gravel;
     Log;
     Leaves;
     Planks;
     Stone_Brick;
+    Grass;
 }
 
 
@@ -149,12 +157,14 @@ ItemInfo[] item_infos = {
     {tool = .Hand},
     {"Stone",        block_id = BlockIds.Stone,           max_stack_count = 32 },
     {"Soil",         block_id = BlockIds.Soil,            max_stack_count = 32 },
-    {"Grass",        block_id = BlockIds.Grass,           max_stack_count = 32 },
+    {"Turf",         block_id = BlockIds.Turf,            max_stack_count = 32 },
     {"Gravel",       block_id = BlockIds.Gravel,          max_stack_count = 32 },
     {"Log",          block_id = BlockIds.Log,             max_stack_count = 32 },
     {"Leaves",       block_id = BlockIds.Leaves,          max_stack_count = 32 },
     {"Planks",       block_id = BlockIds.Planks,          max_stack_count = 32 },
     {"Stone Brick",  block_id = BlockIds.Stone_Brick,     max_stack_count = 32 },
+    {"Grass",        block_id = BlockIds.Grass,           max_stack_count = 32 },
+
     {"Flint Hatchet", sprite_index = 0, tool = .Axe,      max_stack_count = 1, max_durability=500},
     {"Wood Shovel",   sprite_index = 1, tool = .Shovel,   max_stack_count = 1, max_durability=500},
     {"Flint Pickaxe", sprite_index = 2, tool = .Pickaxe,  max_stack_count = 1, max_durability=500},
@@ -172,12 +182,13 @@ enum ItemIds {
     None;
     Stone;
     Soil;
-    Grass;
+    Turf;
     Gravel;
     Log;
     Leaves;
     Planks;
     Stone_Brick;
+    Grass;
 
     Flint_Hatchet;
     Wood_Shovel;
@@ -351,8 +362,8 @@ void main() {
 
 
     for 0 .. Pool_Size {
-        let chunk = *chunk_pool[it];
-        chunk.coord = {99999,99999,99999};
+        let chunk = *surface_chunk_pool[it];
+        chunk.xz_coord = {99999,99999};
     }
 
     init_hotbar(*player_hotbar);
@@ -827,89 +838,99 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
 
     world_draw(R, *world);
 
-    if false {
-        let chunk = last_chunk_interacted_with;
-        if chunk {
-            if chunk.must_remesh  update_octree(chunk);
-            if chunk.octree {
-                draw_octree(0, make_vec(chunk.coord*Chunk_Size) + vec3_one*(Chunk_Size/2.0 - 0.5), Chunk_Size, chunk.octree as Octree_Node*);
+    // if false {
+    //     let chunk = last_chunk_interacted_with;
+    //     if chunk {
+    //         if chunk.must_remesh  update_octree(chunk);
+    //         if chunk.octree {
+    //             draw_octree(0, make_vec(chunk.coord*Chunk_Size) + vec3_one*(Chunk_Size/2.0 - 0.5), Chunk_Size, chunk.octree as Octree_Node*);
+    //         }
+    //     }
+    // }
+
+
+    if true { // debug draw
+        for 0 .. Pool_Size {
+            let surf_chunk = *surface_chunk_pool[it];
+            for 0 .. Chunk_Pool_Size {
+                let chunk = *surf_chunk.sub_chunks[it];
+                float32 size = Chunk_Size;
+                vec3 pos = make_vec(chunk.coord)*size + vec3_one*(size/2.0 - 0.5);
+                float32 opa = 1.0 - clamp01(dist(pos, cam.transform.position) / (Render_Radius*Chunk_Size));
+                gizmo_box(pos, vec3_one*size, opacity(Orange, opa));
             }
         }
     }
 
-
-    if false { // debug draw
-        for 0 .. Pool_Size {
-            let chunk = *chunk_pool[it];
-            float32 size = Chunk_Size;
-            vec3 pos = make_vec(chunk.coord)*size;
-            gizmo_box(pos + vec3_one*(size/2.0 - 0.5), vec3_one*size, Orange);
-        }
-    }
-
-    if false for 0 .. Pool_Size {
-        let chunk = *chunk_pool[it];
-
+    if true {
         Material_PBR pbr = {
             albedo = {1,1,1},
             metallic = 0.1,
             roughness = 0.1
         };
 
-        float32 size = Chunk_Size;
-        vec3 pos = make_vec(chunk.coord)*size;
-
-        if chunk.must_remesh {
-            triangulate_chunk(chunk);
-            chunk.must_remesh = false;
-        }
-
-
         set_depth_mode(DepthTest.Less_Equal, true);
         set_blend_mode(Blend.Overwrite);
-        set_face_render_mode(Poly.Line, Poly.Cull);
-        draw_geometry(R, chunk.db, pbr, *texture_spritesheet, make_mat4(pos, 1));
+        set_face_render_mode(Poly.Fill, Poly.Cull);
+
+        for 0 .. Pool_Size {
+            let surface_chunk = *surface_chunk_pool[it];
+
+            for 0 .. Chunk_Pool_Size {
+                let chunk = *surface_chunk.sub_chunks[it];
+
+                float32 size = Chunk_Size;
+                vec3 pos = make_vec(chunk.coord)*size;
+
+                if chunk.must_remesh {
+                    triangulate_chunk(chunk);
+                    chunk.must_remesh = false;
+                }
+
+                draw_geometry(R, chunk.db, pbr, *texture_spritesheet, make_mat4(pos, 1));
+            }
+        }
     }
 
     begin_light_pass(R);
 
-    {
-        use(*shader_voxel_chunk);
-        set_uniform("u_camera_world_pos", world_cam.transform.position);
-        set_uniform("u_center_chunk_coord", center_chunk_coord);
-        bind_texture2D(texture_spritesheet.gl_handle, 3);
+    // {
+    //     use(*shader_voxel_chunk);
+    //     set_uniform("u_camera_world_pos", world_cam.transform.position);
+    //     set_uniform("u_center_chunk_coord", center_chunk_coord);
+    //     bind_texture2D(texture_spritesheet.gl_handle, 3);
 
-        uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
-        uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
-        byte* buffer = malloc(buffer_bytes);
+    //     uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
+    //     uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
+    //     byte* buffer = malloc(buffer_bytes);
 
-        int32 cpsh = Chunk_Pool_Size/2;
+    //     int32 cpsh = Chunk_Pool_Size/2;
 
-        for 0 .. Pool_Size {
-            let chunk = *chunk_pool[it];
+    //     for 0 .. Pool_Size {
+    //         let chunk = *chunk_pool[it];
 
-            ivec3 rel = abs(chunk.coord - center_chunk_coord);
-            if rel.x > Render_Radius
-            or rel.y > Render_Radius
-            or rel.z > Render_Radius
-                continue;
+    //         ivec3 rel = abs(chunk.coord - center_chunk_coord);
+    //         if rel.x > Render_Radius
+    //         or rel.y > Render_Radius
+    //         or rel.z > Render_Radius
+    //             continue;
 
 
-            ivec3 c = chunk.coord + {cpsh, 0, cpsh} - center_chunk_coord;
-            uint32 index = c.x + c.z * Chunk_Pool_Size;
+    //         ivec3 c = chunk.coord + {cpsh, 0, cpsh} - center_chunk_coord;
+    //         uint32 index = c.x + c.z * Chunk_Pool_Size;
 
-            byte* dst = buffer + index*chunk_bytes;
-            memcpy(dst, *chunk.blocks, chunk_bytes);
-        }
+    //         byte* dst = buffer + index*chunk_bytes;
+    //         memcpy(dst, *chunk.blocks, chunk_bytes);
+    //     }
 
-        update_ssbo("VoxelData", buffer, buffer_bytes);
-        free(buffer);
+    //     update_ssbo("VoxelData", buffer, buffer_bytes);
+    //     free(buffer);
 
-        set_depth_mode(DepthTest.Less_Equal, true);
-        set_blend_mode(Blend.Overwrite);
-        set_face_render_mode(Poly.Fill, Poly.Cull);
-        draw_screen_quad();
-    }
+    //     set_depth_mode(DepthTest.Less_Equal, true);
+    //     set_blend_mode(Blend.Overwrite);
+    //     set_face_render_mode(Poly.Fill, Poly.Cull);
+    //     draw_screen_quad();
+    // }
 
 
     end_frame(R);

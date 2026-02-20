@@ -25,6 +25,18 @@ layout (std430) readonly buffer Textures {
 };
 
 
+// enum BlockIds ....
+#define BlockIds_Air           0
+#define BlockIds_Stone         1
+#define BlockIds_Soil          2
+#define BlockIds_Turf          3
+#define BlockIds_Gravel        4
+#define BlockIds_Log           5
+#define BlockIds_Leaves        6
+#define BlockIds_Planks        7
+#define BlockIds_Stone_Brick   8
+#define BlockIds_Grass         9
+
 
 #define Block_Pixel_Size 16
 
@@ -152,6 +164,22 @@ vec2 ray_aabb_intersects(vec3 o, vec3 r, vec3 l, vec3 h) {
     return vec2(max_axis(t_close), min_axis(t_far));
 }
 
+// https://en.wikipedia.org/wiki/Line%E2%80%93plane_intersection
+float ray_plane_intersects(vec3 o, vec3 d, vec3 p, vec3 n) {
+    float enumerator = dot(p - o, n);
+    float denominator = dot(d, n);
+    return enumerator / denominator;
+
+    // if (denominator == 0.0)  return false; // line and plane are parallel
+    // if  (enumerator == 0.0)  return false; // line is contained in plane
+
+    // dist = enumerator / denominator;
+    // if (dist < 0.0) return false; // ray points in opposite direction of plane
+    // return true;
+}
+
+
+
 ivec2 spritesheet_dimensions;
 vec2 uv_scale;
 
@@ -161,12 +189,14 @@ vec2 calc_uv_offset(int block_id) {
     return uv_offset;
 }
 
+vec4 sample_spritesheet(int block_id, vec2 uv) {
+    vec2 uv_offset = calc_uv_offset(block_id);
+    return texture(u_spritesheet, uv_offset + uv * uv_scale);
+}
+
 struct HitInfo {
     ivec3 coord;
-
     vec2 uv;
-    
-
     vec3 hit_pos;
     vec3 normal;
     vec2 dist;
@@ -174,10 +204,74 @@ struct HitInfo {
     vec3 albedo;
 };
 
+bool is_hit(HitInfo hit) {
+    return hit.block_id != 0;
+}
+
+HitInfo select_hitinfo(HitInfo hit1, HitInfo hit2) {
+    if (!is_hit(hit1)) return hit2;
+    if (!is_hit(hit2)) return hit1;
+
+    if (hit1.dist.x <= hit2.dist.x) return hit1;
+    return hit2;
+}
+
+vec2 uv_from_inorm(vec3 p, ivec3 inorm) {
+
+    vec2 uv;
+    vec3 uv3d = fract(p);
+
+         if (bool(inorm.x)) uv = uv3d.yz;
+    else if (bool(inorm.y)) uv = uv3d.xz;
+    else if (bool(inorm.z)) uv = uv3d.xy;
+
+    return uv;
+}
+
+HitInfo raycast_plane(ivec3 coord, int block_id, vec2 dists, vec3 o, vec3 d, vec3 n) {
+    HitInfo hit;
+    hit.coord = coord;
+    hit.normal = n*sign(-dot(n, d));
+    hit.block_id = block_id;
+
+    vec3 c = vec3(coord);
+    float dist = ray_plane_intersects(o,d, c,n);
+    hit.dist = vec2(dist);
+
+    bool is_hit = (0.0 < dist) && (dists.x < dist && dist < dists.y);
+
+    if (!is_hit) {
+        hit.block_id = 0;
+        return hit;
+    }
+
+    hit.hit_pos = o + d*dist;
+    vec3 local = hit.hit_pos - c;
+
+    vec3 up = vec3(0,1,0);
+    vec3 t = n;
+    t.xz = rot90deg_ccw(t.xz);
+    float y = dot(local, up);
+    float x = dot(local, t);
+
+    hit.uv = vec2(x, y) + vec2(0.5);
+    if (min_axis(hit.uv) < 0.0) {
+        hit.block_id = 0;
+        return hit;
+    }
+
+    vec4 tex_color = sample_spritesheet(block_id, hit.uv);
+    hit.albedo = tex_color.rgb;
+    if (tex_color.a == 0.0) {
+        hit.block_id = 0;
+        return hit;
+    }
+
+    return hit;
+}
+
+
 HitInfo raycast(vec3 o, vec3 d) {
-
-    int block_id_leaves = 6;
-
     Voxel_Traversal_State state = start_traversal(o, d);
     for (int i = 0; i < 1024; i++) {
         ivec3 prev_coord = state.coord;
@@ -190,47 +284,57 @@ HitInfo raycast(vec3 o, vec3 d) {
         if (block_id < 0) break;
         if (block_id == 0) continue;
 
-        ivec3 inorm;
-        vec3 uv3d;
+        vec2 uv;
+        vec3 normal;
 
-        if (block_id == 100) {
-            float box_size = 0.5;
-            vec3 c = vec3(state.coord);
-            vec3 l = c - vec3(box_size/2.0);
-            vec3 h = c + vec3(box_size/2.0);
+        switch (block_id) {
+            case BlockIds_Grass: {
+                vec3 n1 = normalize(vec3(1,0,1));
+                vec3 n2 = normalize(vec3(1,0,-1));
+                HitInfo h1 = raycast_plane(state.coord, block_id, dists, o,d, n1);
+                HitInfo h2 = raycast_plane(state.coord, block_id, dists, o,d, n2);
+                HitInfo new_hit = select_hitinfo(h1, h2);
+                if (is_hit(new_hit)) return new_hit;
+                else continue;
 
-            Ray_AABB_Hit aabb_hit = ray_aabb_intersects_ex(hit_pos, d, l,h);
-            float close = aabb_hit.dists.x;
-            float far   = aabb_hit.dists.y;
+            } break;
 
-            if (close <= 0.0 || close > far) continue;
+            case BlockIds_Leaves: {
+                float box_size = 0.5;
+                vec3 c = vec3(state.coord);
+                vec3 l = c - vec3(box_size/2.0);
+                vec3 h = c + vec3(box_size/2.0);
 
-            hit_pos = hit_pos + d*close;
-            uv3d = fract(hit_pos / box_size);
-            inorm = aabb_hit.normal;
+                Ray_AABB_Hit aabb_hit = ray_aabb_intersects_ex(hit_pos, d, l,h);
+                float close = aabb_hit.dists.x;
+                float far   = aabb_hit.dists.y;
 
-        } else {
+                if (close <= 0.0 || close > far) continue;
 
-            uv3d = fract(hit_pos);
-            inorm = prev_coord - state.coord;
+                hit_pos = hit_pos + d*close;
+
+                // uv3d = fract(hit_pos / box_size);
+                ivec3 inorm = aabb_hit.normal;
+                normal = vec3(inorm);
+                uv = uv_from_inorm(hit_pos, inorm);
+            } break;
+
+            default: {
+                ivec3 inorm = prev_coord - state.coord;
+                normal = vec3(inorm);
+                uv = uv_from_inorm(hit_pos, inorm);
+            } break;
         }
 
-        vec2 uv;
-
-             if (bool(inorm.x)) uv = uv3d.yz;
-        else if (bool(inorm.y)) uv = uv3d.xz;
-        else if (bool(inorm.z)) uv = uv3d.xy;
-
-        vec2 uv_offset = calc_uv_offset(block_id);
-        vec4 tex_color = texture(u_spritesheet, uv_offset + uv * uv_scale);
+        vec4 tex_color = sample_spritesheet(block_id, uv);
         if (tex_color.a == 0.0) continue;
 
         HitInfo hit;
         hit.coord = state.coord;
         hit.uv = uv;
         hit.hit_pos = hit_pos;
-        hit.normal = vec3(inorm);
-        hit.dist = dists;
+        hit.normal = normal;
+        hit.dist = dists; // TODO: dists for leaves
         hit.block_id = block_id;
         hit.albedo = tex_color.rgb;
         return hit;
@@ -267,10 +371,108 @@ out vec3 FragColor;
 
 in IO_Data frag_input;
 
+LightRay g_sun_light;
+vec3 g_sun_world_dir;
+
+float metallic  = 0.1;
+float roughness = 0.1;
+
+
+// vec3 direct_light(HitInfo hit) {
+
+//     HitInfo sun_hit = raycast(hit.hit_pos, g_sun_world_dir);
+
+//     if (sun_hit.block_id != 0 || dot(hit.normal, g_sun_world_dir) <= 0.0) return vec3(0.0);
+
+
+//     float metallic = 0.1;
+//     float roughness = 0.1;
+
+//     Geometry geom;
+//     geom.view_pos    = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
+//     geom.view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);;
+//     geom.albedo      = hit.albedo;
+//     geom.F0          = calc_base_reflectivity(hit.albedo, metallic);
+//     geom.roughness   = roughness;
+//     geom.metallic    = metallic;
+
+//     return cook_torrance_BRDF(g_sun_light, geom);
+// }
+
+vec3 direct_light(HitInfo hit, vec3 R) {
+
+    if (dot(hit.normal, g_sun_world_dir) <= 0.0) {
+        return vec3(0.0);
+    }
+
+
+    float shadow = 0.0;
+
+    HitInfo sun_hit = raycast(hit.hit_pos, g_sun_world_dir);
+    if (sun_hit.block_id != 0) {
+        float ds = sun_hit.dist.x;
+
+        float t = clamp(ds/10.0, 0.0, 1.0);
+        shadow = mix(1.0, 0.0, t);
+
+        // return vec3(0.0);
+    }
+
+    // if (shadow <= 0.0) {
+    //     return vec3(1,0,0);
+    // }
+
+
+
+    Material mat;
+    mat.albedo    = hit.albedo;
+    mat.roughness = roughness;
+    mat.metallic  = metallic;
+    mat.F0        = calc_base_reflectivity(mat.albedo, mat.metallic);
+
+    vec3 I = g_sun_world_dir;
+    vec3 N = normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
+
+    return cook_torrance_BRDF(I, N, R, g_sun_light.radiance, mat) * (1.0 - shadow);
+}
+
+
+vec3 raytrace(HitInfo hit_frag, vec3 o, vec3 d) {
+
+    vec3 N = normal_from_sampler(u_spritesheet, hit_frag.uv, calc_uv_offset(hit_frag.block_id), uv_scale, hit_frag.normal);
+
+
+    vec3 R1 = normalize(u_camera_world_pos - hit_frag.hit_pos);
+    vec3 light = direct_light(hit_frag, R1);
+
+    d = reflect(d, N);
+    HitInfo hit = raycast(hit_frag.hit_pos, d);
+
+    vec3 diff = hit_frag.hit_pos - hit.hit_pos;
+    vec3 R2 = normalize(diff);
+    vec3 reflected_light = direct_light(hit, R2);
+    float attenuation = 1.0 / sq(length(diff));
+
+    Material mat;
+    mat.albedo    = hit_frag.albedo;
+    mat.roughness = roughness;
+    mat.metallic  = metallic;
+    mat.F0        = calc_base_reflectivity(mat.albedo, mat.metallic);
+
+    light += cook_torrance_BRDF(-R2, N, R1, reflected_light* attenuation, mat);
+
+    return light;
+}
+
+
 void main() {
 
     spritesheet_dimensions = textureSize(u_spritesheet, 0) / Block_Pixel_Size;
     uv_scale = vec2(1.0) / spritesheet_dimensions;
+
+    g_sun_world_dir = camera.sun_dir.xyz;
+    g_sun_light.dir = mat3(camera.view) * g_sun_world_dir;
+    g_sun_light.radiance = camera.sun_radiance.xyz;
 
 
     vec3 ray_origin = u_camera_world_pos;
@@ -297,44 +499,16 @@ void main() {
     HitInfo hit = raycast(ray_origin, ray);
     if (hit.block_id == 0) discard;
 
-    vec3 view_pos = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
-    // vec3 view_normal = mat3(camera.view) * hit.normal;
-    vec3 view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
-
-    vec3 albedo = hit.albedo;
-    float metallic = 0.1;
-    float roughness = 0.1;
-
-    vec3 sun_world_dir = camera.sun_dir.xyz;
-
-    LightRay light;
-    light.dir = mat3(camera.view) * sun_world_dir;
-    light.radiance = camera.sun_radiance.xyz;
     float sun_ambient_factor = camera.sun_radiance.w;
-    vec3 ambient_radiance = light.radiance * sun_ambient_factor;
+    vec3 ambient_radiance = g_sun_light.radiance * sun_ambient_factor;
+    vec3 ambient_light = hit.albedo * ambient_radiance;
 
-    Geometry geom;
-    geom.view_pos    = view_pos;
-    geom.view_normal = view_normal;
-    geom.albedo      = albedo;
-    geom.F0          = calc_base_reflectivity(albedo, metallic);
-    geom.roughness   = roughness;
-    geom.metallic    = metallic;
+    vec3 R = normalize(u_camera_world_pos - hit.hit_pos);
+    FragColor = direct_light(hit, R) + ambient_light;
 
-    vec3 d = sun_world_dir;
-    vec3 o = hit.hit_pos;
-    HitInfo sun_hit = raycast(o, d);
+    // FragColor = raytrace(hit, ray_origin, ray);
 
-    if (sun_hit.block_id != 0 || dot(hit.normal, d) <= 0.0) {
-        // float factor = sun_hit.dist.x / 10.0;
-        // direct_light *= smoothstep(0.2, 0.8, clamp(factor, 0,1));
-        FragColor = albedo * ambient_radiance;
-    } else {
-        vec3 ambient_light = albedo * ambient_radiance;
-        vec3 direct_light = cook_torrance_BRDF(light, geom);
-        FragColor = direct_light + ambient_light;
-    }
-
+    vec3 view_pos = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
     gl_FragDepth = get_fragdepth_from_view_space_point(view_pos);
 }
 #endif

@@ -315,6 +315,13 @@ struct Grid_Inter {
     bool is_grounded;
 }
 
+bool has_collision(BlockIds block_id) {
+    if block_id == .Air   return false;
+    if block_id == .Grass return false;
+
+    return true;
+}
+
 Grid_Inter grid_aabb_collision_check(Box box) {
 
     let half_size = box.size * 0.5;
@@ -326,8 +333,9 @@ Grid_Inter grid_aabb_collision_check(Box box) {
     bool is_grounded = false;
 
     for(z: mi.z .. mx.z+1) for(y: mi.y .. mx.y+1) for(x: mi.x .. mx.x+1) {
-        let id = get_block(make_ivec(x, y, z));
-        if id == 0 continue;
+        BlockIds id = get_block(make_ivec(x, y, z)) as BlockIds;
+        if has_collision(id);
+        else continue;
 
         vec3 block_pos = make_vec(x,y,z);
         Box box_block = {block_pos, vec3_one};

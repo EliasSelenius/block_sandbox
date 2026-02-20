@@ -7,20 +7,26 @@ const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
 const Chunk_Size = 32;
 const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 
-Chunk[Pool_Size] chunk_pool;
-Chunk* last_chunk_interacted_with;
+SurfaceChunk[Pool_Size] surface_chunk_pool;
 
 ivec3 center_chunk_coord;
 
 struct Chunk {
-    float32* height_map; // TODO: in the future (when we use compute shaders) height map will not be a per chunk thing
     ivec3 coord;
     uint16[Chunk_Block_Count] blocks;
+
     Mesh mesh;
     DrawBuffers db;
     bool must_remesh;
 
     Octree_Node[..] octree;
+}
+
+struct SurfaceChunk {
+    ivec2 xz_coord;
+    float32* height_map;
+
+    Chunk[Chunk_Pool_Size] sub_chunks;
 }
 
 bool chunk_bound(ivec3 p) {
@@ -39,36 +45,70 @@ int32 get_index(int32 s, ivec3 v) return get_index(s, v.x, v.y, v.z);
 int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
 int32 get_index(ivec3 v) return get_index(v.x, v.y, v.z);
 
-Chunk* get_chunk(ivec3 chunk_coord) {
+SurfaceChunk* get_surface_chunk(ivec2 coord) {
     for 0 .. Pool_Size {
-        let chunk = *chunk_pool[it];
-        if equals(chunk.coord, chunk_coord) return chunk;
+        let chunk = *surface_chunk_pool[it];
+        if equals(chunk.xz_coord, coord) return chunk;
     }
     return null;
 }
 
-uint16 get_block(ivec3 coord) {
-    ivec3 chunk_coord = chunk_coord(coord);
-    let chunk = get_chunk(chunk_coord);
-    if chunk == null return 0;
-
-    let rel = (coord - chunk_coord*Chunk_Size);
-    let index = get_index(rel.x, rel.y, rel.z);
-    uint16 id = chunk.blocks[index];
-    return id;
+Chunk* get_chunk(ivec3 chunk_coord) {
+    let surf_chunk = get_surface_chunk(xz(chunk_coord));
+    if surf_chunk == null return null;
+    int32 index = chunk_coord.y + Render_Radius;
+    if index < 0 or index >= Chunk_Pool_Size return null;
+    return *surf_chunk.sub_chunks[index];
 }
 
-void set_block(ivec3 coord, uint16 id) {
-    ivec3 chunk_coord = chunk_coord(coord);
+uint16* block_ptr(Chunk* chunk, ivec3 world_coord) {
+    ivec3 chunk_coord = chunk_coord(world_coord);
+    ivec3 local = world_coord - chunk_coord * Chunk_Size;
+    if !chunk_bound(local) return null;
+    return *chunk.blocks[get_index(local)];
+}
+
+uint16* block_ptr(ivec3 world_coord) {
+    ivec3 chunk_coord = chunk_coord(world_coord);
+    let chunk = get_chunk(chunk_coord);
+    if chunk == null return null;
+    return block_ptr(chunk, world_coord);
+}
+
+
+uint16 get_block(ivec3 world_coord) {
+    // ivec3 chunk_coord = chunk_coord(world_coord);
+    // let chunk = get_chunk(chunk_coord);
+    // if chunk == null return 0;
+
+    // let rel = (world_coord - chunk_coord*Chunk_Size);
+    // let index = get_index(rel.x, rel.y, rel.z);
+    // uint16 id = chunk.blocks[index];
+    // return id;
+
+    uint16* ptr = block_ptr(world_coord);
+    if ptr return @ptr;
+    return 0;
+}
+
+void set_block(ivec3 world_coord, uint16 id) {
+    // ivec3 chunk_coord = chunk_coord(world_coord);
+    // let chunk = get_chunk(chunk_coord);
+    // if chunk == null return;
+
+    // let rel = (world_coord - chunk_coord*Chunk_Size);
+    // let index = get_index(rel.x, rel.y, rel.z);
+    // chunk.blocks[index] = id;
+
+    ivec3 chunk_coord = chunk_coord(world_coord);
     let chunk = get_chunk(chunk_coord);
     if chunk == null return;
 
-    let rel = (coord - chunk_coord*Chunk_Size);
-    let index = get_index(rel.x, rel.y, rel.z);
-    chunk.blocks[index] = id;
-    chunk.must_remesh = true;
-
-    last_chunk_interacted_with = chunk;
+    uint16* ptr = block_ptr(chunk, world_coord);
+    if ptr {
+        @ptr = id;
+        chunk.must_remesh = true;
+    }
 }
 
 void ensure_chunks(vec3 position) {
@@ -76,26 +116,28 @@ void ensure_chunks(vec3 position) {
     center.y = 0;
     center_chunk_coord = center;
 
-    Chunk*[..] old_chunks = list_create(sizeof Chunk*);
+    ivec2 surface_coord = xz(center);
+
+    SurfaceChunk*[..] old_chunks = list_create(sizeof SurfaceChunk*);
 
     for 0 .. Pool_Size {
-        let chunk = *chunk_pool[it];
-        ivec3 rel = abs(chunk.coord - center);
+        let chunk = *surface_chunk_pool[it];
+        ivec2 rel = abs(chunk.xz_coord - surface_coord);
         if rel.x > Render_Radius
         or rel.y > Render_Radius
-        or rel.z > Render_Radius {
+        {
             list_add(*old_chunks, *chunk);
         }
     }
 
     int32 s = Render_Radius;
     for z: -s .. s+1 for x: -s .. s+1 {
-        ivec3 coord = center + {x, 0, z};
+        ivec2 coord = surface_coord + {x, z};
 
-        Chunk* chunk = get_chunk(coord);
+        SurfaceChunk* chunk = get_surface_chunk(coord);
         if chunk == null {
-            chunk = @(list_pop(old_chunks) as Chunk**);
-            init_chunk(chunk, coord);
+            chunk = @(list_pop(old_chunks) as SurfaceChunk**);
+            init_surface_chunk(chunk, coord);
             goto done;
         }
     }
@@ -121,71 +163,92 @@ float32 sample_terrain_noise(vec2 p) {
     return h;
 }
 
-void init_chunk(Chunk* chunk, ivec3 coord) {
+void init_surface_chunk(SurfaceChunk* surface_chunk, ivec2 coord) {
+    surface_chunk.xz_coord = coord;
+
     int32 s = Chunk_Size;
 
-    chunk.coord = coord;
-    chunk.must_remesh = true;
-
-    if chunk.db.vao == 0 {
-        chunk.mesh = mesh_create();
-        chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
-        chunk.height_map = malloc(s * s * sizeof float32);
+    if surface_chunk.height_map == null {
+        surface_chunk.height_map = malloc(s * s * sizeof float32);
     }
-
 
     for z: 0 .. s for x: 0 .. s {
-        vec2 pos = (make_vec(x, z) + make_vec(xz(coord))*s);
+        vec2 pos = (make_vec(x, z) + make_vec(coord)*s);
 
         float32 height = sample_terrain_noise(pos);
-        chunk.height_map[z * s + x] = height;
+        surface_chunk.height_map[z * s + x] = height;
     }
 
-    int32 sample_height(Chunk* chunk, int32 x, z) {
-        int32 s = Chunk_Size;
-        float32 height = chunk.height_map[z * s + x];
-        return map(height, -64, 64, -s/2.0, s/2.0) as int32 + s/2;
-    }
+    for 0 .. Chunk_Pool_Size {
+        let chunk = *surface_chunk.sub_chunks[it];
+        chunk.coord = {coord.x, -Render_Radius + it, coord.y};
+        chunk.must_remesh = true;
 
-    for z: 0 .. s for x: 0 .. s
-    for y: 0 .. s {
-        uint16 block_id = BlockIds.Air;
-        int32 h = sample_height(chunk, x, z);
-
-        int32 depth = h - y;
-        if depth >= 0 {
-            if depth == 0     block_id = BlockIds.Grass;
-            else if depth < 3 block_id = BlockIds.Soil;
-            else              block_id = BlockIds.Stone;
+        if chunk.db.vao == 0 {
+            chunk.mesh = mesh_create();
+            chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
         }
 
-        chunk.blocks[get_index(x, y, z)] = block_id;
+        memset(chunk.blocks, 0, Chunk_Block_Count * sizeof uint16);
     }
 
-    int32 seed = 0;
 
-    int32 rx = (random01(seed++)*s) as int32;
-    int32 rz = (random01(seed++)*s) as int32;
-    int32 ry = sample_height(chunk, rx, rz);
+    int32 sample_height(SurfaceChunk* surface_chunk, int32 x, z) {
+        int32 s = Chunk_Pool_Size * Chunk_Size;
 
-    chunk.blocks[get_index(rx, ry, rz)] = BlockIds.Gravel;
-
-    for 0 .. 10 {
-        int32 x = (random01(seed++)*s) as int32;
-        int32 z = (random01(seed++)*s) as int32;
-        int32 y = sample_height(chunk, x, z);
-        gen_tree(*seed, chunk, make_ivec(x, y, z));
+        float32 height = surface_chunk.height_map[z * Chunk_Size + x];
+        // return map(height, -64, 64, -s/2.0, s/2.0) as int32;
+        return height as int32;
     }
 
-    for 0 .. 3 {
-        int32 x = (random01(seed++)*s) as int32;
-        int32 z = (random01(seed++)*s) as int32;
+    for 0 .. Chunk_Pool_Size {
+        let chunk = *surface_chunk.sub_chunks[it];
 
-        int32 y = sample_height(chunk, x, z);
+        for z: 0 .. s for y: 0 .. s for x: 0 .. s {
+            ivec3 block_coord = chunk.coord*Chunk_Size + {x,y,z};
 
-        vec3 pos = {x,y+1,z} + make_vec(chunk.coord*s);
-        spawn_bush(pos);
+            int32 h = sample_height(surface_chunk, x, z);
+            int32 depth = h - block_coord.y;
+
+            uint16 block_id = BlockIds.Air;
+            if depth >= 0 {
+                if      depth == 0   block_id = BlockIds.Turf;
+                else if depth < 3    block_id = BlockIds.Soil;
+                else                 block_id = BlockIds.Stone;
+            }
+
+            let block_id_ptr = block_ptr(chunk, block_coord);
+            if block_id_ptr {
+                @block_id_ptr = block_id;
+            }
+        }
     }
+
+
+    // int32 seed = 0;
+
+    // int32 rx = (random01(seed++)*s) as int32;
+    // int32 rz = (random01(seed++)*s) as int32;
+    // int32 ry = sample_height(chunk, rx, rz);
+
+    // chunk.blocks[get_index(rx, ry, rz)] = BlockIds.Gravel;
+
+    // for 0 .. 10 {
+    //     int32 x = (random01(seed++)*s) as int32;
+    //     int32 z = (random01(seed++)*s) as int32;
+    //     int32 y = sample_height(chunk, x, z);
+    //     gen_tree(*seed, chunk, make_ivec(x, y, z));
+    // }
+
+    // for 0 .. 3 {
+    //     int32 x = (random01(seed++)*s) as int32;
+    //     int32 z = (random01(seed++)*s) as int32;
+
+    //     int32 y = sample_height(chunk, x, z);
+
+    //     vec3 pos = {x,y+1,z} + make_vec(chunk.coord*s);
+    //     spawn_bush(pos);
+    // }
 
 }
 
