@@ -164,19 +164,7 @@ vec2 ray_aabb_intersects(vec3 o, vec3 r, vec3 l, vec3 h) {
     return vec2(max_axis(t_close), min_axis(t_far));
 }
 
-// https://en.wikipedia.org/wiki/Line%E2%80%93plane_intersection
-float ray_plane_intersects(vec3 o, vec3 d, vec3 p, vec3 n) {
-    float enumerator = dot(p - o, n);
-    float denominator = dot(d, n);
-    return enumerator / denominator;
 
-    // if (denominator == 0.0)  return false; // line and plane are parallel
-    // if  (enumerator == 0.0)  return false; // line is contained in plane
-
-    // dist = enumerator / denominator;
-    // if (dist < 0.0) return false; // ray points in opposite direction of plane
-    // return true;
-}
 
 
 
