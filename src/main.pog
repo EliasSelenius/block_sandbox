@@ -377,15 +377,11 @@ void main() {
         }
 
         if key_pressed('R') {
-            void rl(Shader* sh) {
-                delete_shader(sh);
-                @sh = load_shader(sh.name.chars);
-            }
-            rl(*R.shader_geometry);
-            rl(*default2d_shader);
-            rl(*ui_shader);
-            rl(*shader_voxel_chunk);
-            rl(*R.shader_dirlight);
+            shader_reload(Shaders.gpass);
+            shader_reload(*default2d_shader);
+            shader_reload(*ui_shader);
+            shader_reload(*shader_voxel_chunk);
+            shader_reload(Shaders.dirlight);
 
             reload_sprites();
         }
@@ -538,7 +534,7 @@ void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
     }
 
     if en.is_grounded {
-        if key_pressed(key_jump)  en.vel.y += player_jump_vel();
+        if key_down(key_jump)  en.vel.y += player_jump_vel();
     }
 
     // draw_text(make_vec(0.1, 0), 0.05, to_string(length(en.vel)), White);
@@ -849,7 +845,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     // }
 
 
-    if true { // debug draw
+    if false { // debug draw
         for 0 .. Pool_Size {
             let surf_chunk = *surface_chunk_pool[it];
             for 0 .. Chunk_Pool_Size {
