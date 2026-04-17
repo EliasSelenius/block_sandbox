@@ -153,10 +153,11 @@ float32 sample_terrain_noise(vec2 p) {
     for 0 .. octaves {
         float32 d = 1.0 / pow(2, it);
 
-        float32 f = 100 * d;
+        float32 f = 1000 * d;
         float32 a = 64 * d;
 
-        float32 t = gnoise(make_vec(p/f, 0));
+        // float32 t = gnoise(make_vec(p/f, 0));
+        float32 t = sdnoise(p/f, null);
         h += t*a;
     }
 
@@ -225,30 +226,30 @@ void init_surface_chunk(SurfaceChunk* surface_chunk, ivec2 coord) {
     }
 
 
-    // int32 seed = 0;
+    int32 seed = coord.x * 5723 + coord.y * 1325;
 
-    // int32 rx = (random01(seed++)*s) as int32;
-    // int32 rz = (random01(seed++)*s) as int32;
-    // int32 ry = sample_height(chunk, rx, rz);
+    ivec3 rand_block_pos(SurfaceChunk* sc, int32* seed) {
+        int32 rx = (random01((@seed)++) * Chunk_Size) as int32;
+        int32 rz = (random01((@seed)++) * Chunk_Size) as int32;
+        int32 ry = sample_height(sc, rx, rz);
 
-    // chunk.blocks[get_index(rx, ry, rz)] = BlockIds.Gravel;
+        return {rx, ry, rz} + {sc.xz_coord.x, 0, sc.xz_coord.y}*Chunk_Size;
+    }
 
-    // for 0 .. 10 {
-    //     int32 x = (random01(seed++)*s) as int32;
-    //     int32 z = (random01(seed++)*s) as int32;
-    //     int32 y = sample_height(chunk, x, z);
-    //     gen_tree(*seed, chunk, make_ivec(x, y, z));
-    // }
+    set_block(rand_block_pos(surface_chunk, *seed), BlockIds.Gravel);
 
-    // for 0 .. 3 {
-    //     int32 x = (random01(seed++)*s) as int32;
-    //     int32 z = (random01(seed++)*s) as int32;
+    for 0 .. 10 {
+        ivec3 world = rand_block_pos(surface_chunk, *seed);
+        let chunk = get_chunk(chunk_coord(world));
 
-    //     int32 y = sample_height(chunk, x, z);
+        gen_tree(*seed, chunk, world - chunk.coord*s);
+    }
 
-    //     vec3 pos = {x,y+1,z} + make_vec(chunk.coord*s);
-    //     spawn_bush(pos);
-    // }
+    for 0 .. 3 {
+        ivec3 world = rand_block_pos(surface_chunk, *seed);
+        // let chunk = get_chunk(chunk_coord(world));
+        spawn_bush(make_vec(world) + {0,1,0});
+    }
 
 }
 
