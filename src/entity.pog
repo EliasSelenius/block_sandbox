@@ -195,8 +195,8 @@ Entity* spawn_item(vec3 pos, vel, Item item, float32 cooldown) {
     en.cooldown = cooldown;
 
     en.mass = 1.0;
-    en.bounciness = 0.8;
-    en.cof_k = 0.1;
+    en.bounciness = 0.4;
+    en.cof_k = 0.3;
     en.cof_s = 1.2 * en.cof_k;
     return en;
 }
@@ -398,7 +398,10 @@ void entity_update(Entity* en, float32 dt) {
 
     switch (en.kind) {
     case .Item: {
-        rotate(*en.tr, vec3_unit_y, Pi*dt);
+        let info = item_infos[en.item_stack.id];
+
+        if info.block_id rotate(*en.tr, vec3_unit_y, Pi*dt);
+        else look_at(*en.tr, world_cam.transform.position);
 
         if player_can_recieve_item(en.item_stack)
         if en.cooldown <= 0.0 {
@@ -557,7 +560,7 @@ InstanceData* draw_cube(Sprite sprite, Material_PBR material, mat4 model) {
     return batch(*draw_command_cubes, model, sprite.uv_offset, sprite.uv_scale, material, sprite.tex);
 }
 
-void draw_shadow(vec3 pos, float32 scale) {
+void draw_shadow(vec3 pos, Box aabb, float32 scale) {
     vec3 shadow_pos = pos;
     shadow_pos.y = round(pos.y) - 0.499;
 
@@ -566,7 +569,9 @@ void draw_shadow(vec3 pos, float32 scale) {
         float32 albedo_scale = 0.02;
         Material_PBR pbr = { metallic = 0, roughness = 0, albedo = make_vec3(albedo_scale) };
 
-        float32 shadow_scale = 1.0 - scale * (pos.y - shadow_pos.y);
+        // float32 shadow_scale = scale * (1.0 - (pos.y - shadow_pos.y));
+        // TODO: aabb.center not accounted for
+        float shadow_scale = scale * (1.0 - (pos.y - aabb.size.y/2.0 - shadow_pos.y));
 
         draw_quad(make_sprite(*white_texture), pbr, make_mat4(shadow_pos, make_vec3(shadow_scale), axis_angle(vec3_unit_x, Half_Pi)));
     }
@@ -668,7 +673,7 @@ void world_draw(DeferredRenderer* R, World* w) {
 
         switch (en.kind) {
         case .Item: {
-            draw_shadow(en.tr.position, (en.tr.scale * en.aabb.size).x);
+            draw_shadow(en.tr.position, en.aabb, (en.tr.scale * en.aabb.size).x);
 
             if info.block_id   draw_cube(info.sprite, mat, model);
             else               draw_quad(info.sprite, mat, model);
