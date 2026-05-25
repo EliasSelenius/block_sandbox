@@ -48,6 +48,7 @@ RenderLayer static_ui_foreground;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
 Shader shader_voxel_chunk;
+Shader* shader_chunkgen = alloc_shader("shaders/chunkgen.glsl");
 
 Texture2D texture_spritesheet;
 Texture2D texture_items_spritesheet;
@@ -269,11 +270,12 @@ void reload_sprites() {
         }
     }
 
+    linearize_color_space(spritesheet);
     texture_spritesheet = create_texture2D(spritesheet);
     set_filter(texture_spritesheet, TextureFilter.nearest);
     free(spritesheet.pixels);
 
-    for 0 .. block_infos.length {
+    for uint32 it: 0 .. block_infos.length {
         let bi = *block_infos[it];
         if bi.image_file_name {
             bi.sprite.tex = *texture_spritesheet;
@@ -382,6 +384,7 @@ void main() {
             shader_reload(*ui_shader);
             shader_reload(*shader_voxel_chunk);
             shader_reload(Shaders.dirlight);
+            shader_reload(shader_chunkgen);
 
             reload_sprites();
         }
@@ -401,15 +404,29 @@ void main() {
         }
 
         world_update(*world, dt);
-
-        glDepthMask(true);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         draw_frame(R, world_cam);
-        gizmo_dispatch();
-        dispatch_layer(*static_ui, {scale=1} as Transform2D);
-        dispatch_sprites({scale=1} as Transform2D);
-        dispatch_layer(*static_ui_foreground, {scale=1} as Transform2D);
     }
+}
+
+void compute_chunk(Chunk* chunk) {
+    let ssbo = get_ssbo("Chunk");
+    uint32 size = Chunk_Block_Count*sizeof uint16;
+    update_buffer(ssbo.buffer_id, size, null);
+
+    use(shader_chunkgen);
+    set_uniform("u_chunk_coord", chunk.coord);
+    dispatch_compute(Chunk_Size, Chunk_Size, Chunk_Size);
+
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.buffer_id);
+
+    int32 buffer_size = 0;
+    glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, *buffer_size);
+
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, size, *chunk.blocks);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    chunk.must_remesh = true;
 }
 
 struct Checkbox_State {
@@ -734,8 +751,11 @@ void item_action(Item* item, float32 dt) {
 
                             set_block(target_block.coord, 0);
 
-                            Item item_drop = {drop.item_id, max(drop.item_count, 1)};
-                            spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
+                            uint32 count = max(drop.item_count, 1);
+                            Item item_drop = {drop.item_id, 1};
+                            for 0 .. count {
+                                spawn_item(make_vec(target_block.coord), random_unit_vec3() * 3, item_drop, 0.3);
+                            }
                         }
 
                         color_bb = Red;
@@ -824,6 +844,10 @@ void fell_tree(ivec3 coord) {
 }
 
 void draw_frame(DeferredRenderer* R, Camera cam) {
+    glDepthMask(true);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
     let time = app.total_run_time / 10.0;
     // R.sun_dir = noz(make_vec(cosf(time), 0.7, sinf(time)));
     // R.sun_dir = noz(forward(cam.transform));
@@ -927,6 +951,12 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     //     set_face_render_mode(Poly.Fill, Poly.Cull);
     //     draw_screen_quad();
     // }
+
+
+    gizmo_dispatch();
+    dispatch_layer(*static_ui, {scale=1} as Transform2D);
+    dispatch_sprites({scale=1} as Transform2D);
+    dispatch_layer(*static_ui_foreground, {scale=1} as Transform2D);
 
 
     end_frame(R);

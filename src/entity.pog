@@ -906,6 +906,11 @@ float32 ui_item_scale        = 0.7;
 float32 ui_item_scale_hover  = 0.8;
 float32 ui_item_scale_select = 1.1;
 
+Color ui_item_slot_color        = opacity(Black, 0.8);
+Color ui_item_slot_color_hover  = opacity(Gray,  0.9);
+Color ui_item_slot_color_border = opacity(Black, 0.9);
+
+
 
 void open_inventory(Inventory* hotbar, backpack, chest) {
     let state = *ui_inventory_state;
@@ -1032,8 +1037,11 @@ void draw_border(UI_Rect rect, float32 border_thickness, Color color) {
 }
 
 void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
-    Color color = lerp(hover_t, opacity(Black, opa*0.6), opacity(Gray, opa*0.8));
-    Color color_border = opacity(Black, opa*0.8);
+    Color color = lerp(hover_t, ui_item_slot_color, ui_item_slot_color_hover);
+    Color color_border = ui_item_slot_color_border;
+
+    color.a *= opa;
+    color_border.a *= opa;
 
     float32 px = 2.0 / app.window_height;
 
