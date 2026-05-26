@@ -27,6 +27,33 @@ uniform ivec3 u_chunk_coord;
 #define BlockIds_Stone_Brick   8
 #define BlockIds_Grass         9
 
+void sdnoise_layers(vec3 coord, out float value, out vec3 gradient) {
+    float largest_f = 100.0;
+    float largest_a = 100.0;
+
+    float smalest_f = 5;
+    float smalest_a = 1;
+
+    float total = 0.0;
+    float h = 0;
+    vec3 grad = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+        float d = 1.0 / pow(2, i);
+        float f = mix(smalest_f, largest_f, d);
+        float a = mix(smalest_a, largest_a, d);
+
+        vec3 g = vec3(0.0);
+        h += sdnoise(coord / f, g) * a;
+        grad += g * (a/f);
+        total += a;
+    }
+
+    value = h / total;
+    gradient = grad;
+
+    // vec3 norm = normalize(vec3(-grad.x, 1, -grad.y));
+    // return vec4(norm, h);
+}
 
 #ifdef Compute
 void main() {
@@ -37,11 +64,24 @@ void main() {
 
     vec3 pos = u_chunk_coord * Chunk_Size + inv_id;
 
+    float min_height = -128;
+    float max_height =  128;
+
+    float td = (pos.y - min_height) / (max_height - min_height);
+    float density = 1.0 - td;
+
+
     vec3 gradient;
-    float n = sdnoise(pos/100.0, gradient);
+    float value;
+    sdnoise_layers(pos, value, gradient);
+
+    float upness = dot(gradient, vec3(0,1,0));
 
     int block_id = BlockIds_Air;
-    if (n < 0) block_id = BlockIds_Stone;
+    if ((value+1.0)*0.5 < density) {
+        block_id = BlockIds_Soil;
+        if (upness > 0.5) block_id = BlockIds_Turf;
+    }
 
     blocks[Chunk_Size*Chunk_Size*inv_id.z + Chunk_Size*inv_id.y + inv_id.x] = uint16_t(block_id);
 }
