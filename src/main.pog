@@ -73,6 +73,7 @@ Key key_open_inventory      = .E;
 Key key_drop_item           = .Q;
 Key key_thirdperson_toggle  = .backspace;
 Key key_freecam_toggle      = .enter;
+Key key_toggle_flight       = .C;
 
 MouseButton mouse_primary_action = .Left;
 MouseButton mouse_secondary_action = .Right;
@@ -386,6 +387,11 @@ void main() {
             shader_reload(Shaders.dirlight);
             shader_reload(shader_chunkgen);
 
+            for 0 .. Pool_Size {
+                let chunk = *surface_chunk_pool[it];
+                chunk.xz_coord = {9999, 99999};
+            }
+
             reload_sprites();
         }
 
@@ -510,14 +516,32 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
     return {};
 }
 
-// type Abled = uint8;
-// const Enabled  = 1 as Abled;
-// const Disabled = 0 as Abled;
+// void* map_buffer(uint32 id) {}
+// void unmap_buffer(uint32 id) {}
 
-// cusror(Abled b);
-// cursor(Disabled);
+// void* gpu_malloc(uint32 size) {
+//     uint32 id;
+//     glGenBuffers(1, *id);
+//     glBindBuffer(GL_ARRAY_BUFFER, id);
+//     glBufferData(GL_ARRAY_BUFFER, size, null, GL_STATIC_DRAW);
+//     void* ptr = glMapBuffer(GL_ARRAY_BUFFER, GL_READ_WRITE);
+//     glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+//     return ptr;
+// }
+
+// void* gpu_realloc(void* ptr, uint32 size) {
+    
+// }
+
 
 void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
+
+    float32 player_friction(vec3 normal) {
+        static float32 player_default_friction = 0.8;
+        if almost_equals(1.0, dot(vec3_unit_y, normal)) return player_default_friction;
+        return 0.0;
+    }
 
     vec3 f = noz(forward(cam.transform) * make_vec(1,0,1));
     vec3 s = noz(   left(cam.transform) * make_vec(1,0,1));
@@ -528,29 +552,29 @@ void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
     float32 acc_time  = player.stats.acc_time;
     float32 acceleration = max_speed / acc_time;
 
-    // time it takes to go from 0 to max_speed given acceleration
-    // max_speed / acceleration = seconds
-    // acc = max_speed / seconds
 
-    vec3 target_vel = movement*max_speed;
-    target_vel.y = en.vel.y;
-
-    float32 player_friction(vec3 normal) {
-        static float32 player_default_friction = 0.8;
-        if almost_equals(1.0, dot(vec3_unit_y, normal)) return player_default_friction;
-        return 0.0;
-    }
-
-    en.cof_k = 0.8;
-    en.cof_s = 1.2 * en.cof_k;
-
-    if sqlength(input) > 0 {
+    if player.flying {
+        float fly_speed = max_speed * 2.0;
+        vec3 target_vel = (movement + {y=key_axis(Key.left_shift, key_jump)}) * fly_speed;
         en.vel = move(en.vel, target_vel, acceleration*dt);
-        en.cof_k = 0;
-        en.cof_s = 0;
+
+    } else {
+        vec3 target_vel = movement*max_speed;
+        target_vel.y = en.vel.y;
+
+        en.cof_k = 0.8;
+        en.cof_s = 1.2 * en.cof_k;
+
+        if sqlength(input) > 0 {
+            en.vel = move(en.vel, target_vel, acceleration*dt);
+            en.cof_k = 0;
+            en.cof_s = 0;
+        }
     }
 
     if en.is_grounded {
+        player.flying = false;
+
         if key_down(key_jump)  en.vel.y += player_jump_vel();
     }
 
@@ -573,6 +597,13 @@ void player_control(float32 dt) {
         }
     }
 
+    if key_pressed(key_toggle_flight) {
+        player.flying = !player.flying;
+
+        if player.flying {
+            player_en.vel.y += player_jump_vel();
+        }
+    }
 
 
     /*

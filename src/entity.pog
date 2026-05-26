@@ -12,6 +12,8 @@ struct Player {
 
     bool holding_entity;
     uint32 held_entity_index;
+
+    bool flying;
 }
 
 Player player = {
@@ -36,7 +38,7 @@ struct Stats {
     float32 jump_time;
 }
 
-
+// https://www.desmos.com/calculator/kfakkr7c2j
 float32 player_gravity() return -8.0 * player.stats.jump_height / sq(player.stats.jump_time);
 float32 player_jump_vel() return 4.0 * player.stats.jump_height / player.stats.jump_time;
 
@@ -137,12 +139,12 @@ struct Entity {
     Item item_stack;
     uint16 block_id;
 
-    float32 cooldown;
+    float cooldown;
     uint32 hp;
 
-    float32 mass;
-    float32 bounciness;
-    float32 cof_k, cof_s;
+    float mass;
+    float bounciness;
+    float cof_k, cof_s;
 
     bool is_grounded;
     bool grid_aligned;
@@ -366,6 +368,7 @@ void entity_update(Entity* en, float32 dt) {
     float32 g = -9.8;
     if en == *player_en {
         g = player_gravity();
+        if player.flying  g = 0;
     }
 
     if en.grid_aligned {
