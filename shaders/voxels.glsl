@@ -4,6 +4,7 @@
 
 #include "../grax/shaders/camera.glsl"
 #include "../grax/shaders/lights.glsl"
+#include "shaders/vox.glsl"
 
 #define IO_Data FragData {\
     vec2 ndc;\
@@ -24,53 +25,33 @@ layout (std430) readonly buffer Textures {
     sampler2D textures[];
 };
 
-
-// enum BlockIds ....
-#define BlockIds_Air           0
-#define BlockIds_Stone         1
-#define BlockIds_Soil          2
-#define BlockIds_Turf          3
-#define BlockIds_Gravel        4
-#define BlockIds_Log           5
-#define BlockIds_Leaves        6
-#define BlockIds_Planks        7
-#define BlockIds_Stone_Brick   8
-#define BlockIds_Grass         9
+// layout (std430) readonly buffer VoxelData {
+//     uint16_t blocks[];
+// };
 
 
-#define Block_Pixel_Size 16
-
-#define Render_Radius 4
-#define Chunk_Pool_Size (Render_Radius*2 + 1)
-#define Pool_Size (Chunk_Pool_Size*Chunk_Pool_Size)
-#define Chunk_Size 32
-#define Chunk_Block_Count (Chunk_Size * Chunk_Size * Chunk_Size)
-
-layout (std430) readonly buffer VoxelData {
-    uint16_t blocks[];
-};
 
 int get_index(ivec3 v) { return v.z * Chunk_Size * Chunk_Size + v.y * Chunk_Size + v.x; }
 ivec3 chunk_coord(ivec3 block_coord) { return ivec3(floor(vec3(block_coord) / float(Chunk_Size))); }
 
-int get_block(ivec3 block_coord) {
-    int cpsh = Chunk_Pool_Size/2;
-    ivec3 c = chunk_coord(block_coord) + ivec3(cpsh, 0, cpsh) - u_center_chunk_coord;
-    int chunk_index = c.x + c.z * Chunk_Pool_Size;
+// int get_block(ivec3 block_coord) {
+//     int cpsh = Chunk_Pool_Size/2;
+//     ivec3 c = chunk_coord(block_coord) + ivec3(cpsh, 0, cpsh) - u_center_chunk_coord;
+//     int chunk_index = c.x + c.z * Chunk_Pool_Size;
 
-    ivec3 chunk_pool_dim = ivec3(Chunk_Pool_Size, 1, Chunk_Pool_Size);
+//     ivec3 chunk_pool_dim = ivec3(Chunk_Pool_Size, 1, Chunk_Pool_Size);
 
-    // negative block_id represent out-of-bounds (no block data)
-    if (c.x < 0 || c.x >= chunk_pool_dim.x) return -1;
-    if (c.z < 0 || c.z >= chunk_pool_dim.z) return -2;
-    if (c.y < 0 || c.y >= chunk_pool_dim.y) return -3;
+//     // negative block_id represent out-of-bounds (no block data)
+//     if (c.x < 0 || c.x >= chunk_pool_dim.x) return -1;
+//     if (c.z < 0 || c.z >= chunk_pool_dim.z) return -2;
+//     if (c.y < 0 || c.y >= chunk_pool_dim.y) return -3;
 
-    ivec3 local_coord = block_coord - chunk_coord(block_coord) * Chunk_Size;
-    int local_index = get_index(local_coord);
+//     ivec3 local_coord = block_coord - chunk_coord(block_coord) * Chunk_Size;
+//     int local_index = get_index(local_coord);
 
-    int block_index = chunk_index * Chunk_Block_Count + local_index;
-    return int(blocks[block_index]);
-}
+//     int block_index = chunk_index * Chunk_Block_Count + local_index;
+//     return int(blocks[block_index]);
+// }
 
 
 
@@ -154,16 +135,6 @@ Ray_AABB_Hit ray_aabb_intersects_ex(vec3 o, vec3 r, vec3 l, vec3 h) {
 
     return hit;
 }
-
-vec2 ray_aabb_intersects(vec3 o, vec3 r, vec3 l, vec3 h) {
-    vec3 t_low  = (l - o) / r;
-    vec3 t_high = (h - o) / r;
-    vec3 t_close = min(t_low, t_high);
-    vec3 t_far   = max(t_low, t_high);
-
-    return vec2(max_axis(t_close), min_axis(t_far));
-}
-
 
 
 
@@ -261,14 +232,15 @@ HitInfo raycast_plane(ivec3 coord, int block_id, vec2 dists, vec3 o, vec3 d, vec
 
 HitInfo raycast(vec3 o, vec3 d) {
     Voxel_Traversal_State state = start_traversal(o, d);
-    for (int i = 0; i < 1024; i++) {
+    for (int i = 0; i < 64; i++) {
         ivec3 prev_coord = state.coord;
         state = traverse(state);
 
         vec2 dists = travel_distance(state);
         vec3 hit_pos = o + d * dists.x;
 
-        int block_id = get_block(state.coord);
+        // int block_id = get_block(state.coord);
+        int block_id = sample_block_at_coord(state.coord);
         if (block_id < 0) break;
         if (block_id == 0) continue;
 
@@ -365,27 +337,18 @@ vec3 g_sun_world_dir;
 float metallic  = 0.1;
 float roughness = 0.1;
 
+vec3 brdf(HitInfo hit, vec3 R) {
+    Material mat;
+    mat.albedo    = hit.albedo;
+    mat.roughness = roughness;
+    mat.metallic  = metallic;
+    mat.F0        = calc_base_reflectivity(mat.albedo, mat.metallic);
 
-// vec3 direct_light(HitInfo hit) {
+    vec3 I = g_sun_world_dir;
+    vec3 N = normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
 
-//     HitInfo sun_hit = raycast(hit.hit_pos, g_sun_world_dir);
-
-//     if (sun_hit.block_id != 0 || dot(hit.normal, g_sun_world_dir) <= 0.0) return vec3(0.0);
-
-
-//     float metallic = 0.1;
-//     float roughness = 0.1;
-
-//     Geometry geom;
-//     geom.view_pos    = (camera.view * vec4(hit.hit_pos, 1.0)).xyz;
-//     geom.view_normal = mat3(camera.view) * normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);;
-//     geom.albedo      = hit.albedo;
-//     geom.F0          = calc_base_reflectivity(hit.albedo, metallic);
-//     geom.roughness   = roughness;
-//     geom.metallic    = metallic;
-
-//     return cook_torrance_BRDF(g_sun_light, geom);
-// }
+    return cook_torrance_BRDF(I, N, R, g_sun_light.radiance, mat);
+}
 
 vec3 direct_light(HitInfo hit, vec3 R) {
 
@@ -410,18 +373,7 @@ vec3 direct_light(HitInfo hit, vec3 R) {
     //     return vec3(1,0,0);
     // }
 
-
-
-    Material mat;
-    mat.albedo    = hit.albedo;
-    mat.roughness = roughness;
-    mat.metallic  = metallic;
-    mat.F0        = calc_base_reflectivity(mat.albedo, mat.metallic);
-
-    vec3 I = g_sun_world_dir;
-    vec3 N = normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
-
-    return cook_torrance_BRDF(I, N, R, g_sun_light.radiance, mat) * (1.0 - shadow);
+    return brdf(hit, R) * (1.0 - shadow);
 }
 
 
@@ -466,7 +418,7 @@ void main() {
     vec3 ray_origin = u_camera_world_pos;
     vec3 ray = camera_ray(frag_input.ndc);
 
-    if (true) { // clamping ray_origin to world bounding box
+    if (false) { // clamping ray_origin to world bounding box
         ivec3 chunk_pool_dim = ivec3(Chunk_Pool_Size, 1, Chunk_Pool_Size);
         vec3 dim = vec3(chunk_pool_dim * Chunk_Size);
         vec3 center = u_center_chunk_coord * Chunk_Size + vec3(float(Chunk_Size)/2.0 - 0.5);
@@ -487,12 +439,17 @@ void main() {
     HitInfo hit = raycast(ray_origin, ray);
     if (hit.block_id == 0) discard;
 
+    vec3 R = normalize(u_camera_world_pos - hit.hit_pos);
+
+
     float sun_ambient_factor = camera.sun_radiance.w;
     vec3 ambient_radiance = g_sun_light.radiance * sun_ambient_factor;
     vec3 ambient_light = hit.albedo * ambient_radiance;
+    // FragColor = ambient_light;
+    FragColor = ambient_light + brdf(hit, R);
 
-    vec3 R = normalize(u_camera_world_pos - hit.hit_pos);
-    FragColor = direct_light(hit, R) + ambient_light;
+
+    // FragColor = direct_light(hit, R) + ambient_light;
 
     // FragColor = raytrace(hit, ray_origin, ray);
 

@@ -3,6 +3,7 @@ const Render_Radius = 4;
 
 const Chunk_Pool_Size = Render_Radius*2 + 1;
 const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
+const Chunk_Pool_Count = Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size;
 
 const Chunk_Size = 32;
 const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
@@ -11,9 +12,17 @@ SurfaceChunk[Pool_Size] surface_chunk_pool;
 
 ivec3 center_chunk_coord;
 
+// const Chunk_Occupancy_Mask_Size = Chunk_Block_Count / 8;
+// bool sample_occupancy_mask(ivec3 local) {
+// }
+
+Chunk[Chunk_Pool_Count] chunk_pool;
+
 struct Chunk {
     ivec3 coord;
-    uint16[Chunk_Block_Count] blocks;
+    // uint16[Chunk_Block_Count] blocks;
+    uint16* blocks;
+    uint32 blocks_buffer_id;
 
     Mesh mesh;
     DrawBuffers db;
@@ -75,39 +84,17 @@ uint16* block_ptr(ivec3 world_coord) {
     return block_ptr(chunk, world_coord);
 }
 
-
 uint16 get_block(ivec3 world_coord) {
-    // ivec3 chunk_coord = chunk_coord(world_coord);
-    // let chunk = get_chunk(chunk_coord);
-    // if chunk == null return 0;
-
-    // let rel = (world_coord - chunk_coord*Chunk_Size);
-    // let index = get_index(rel.x, rel.y, rel.z);
-    // uint16 id = chunk.blocks[index];
-    // return id;
-
     uint16* ptr = block_ptr(world_coord);
     if ptr return @ptr;
     return 0;
 }
 
 void set_block(ivec3 world_coord, uint16 id) {
-    // ivec3 chunk_coord = chunk_coord(world_coord);
-    // let chunk = get_chunk(chunk_coord);
-    // if chunk == null return;
-
-    // let rel = (world_coord - chunk_coord*Chunk_Size);
-    // let index = get_index(rel.x, rel.y, rel.z);
-    // chunk.blocks[index] = id;
-
-    ivec3 chunk_coord = chunk_coord(world_coord);
-    let chunk = get_chunk(chunk_coord);
-    if chunk == null return;
-
-    uint16* ptr = block_ptr(chunk, world_coord);
+    uint16* ptr = block_ptr(world_coord);
     if ptr {
         @ptr = id;
-        chunk.must_remesh = true;
+        // chunk.must_remesh = true;
     }
 }
 

@@ -508,15 +508,6 @@ void world_update(World* w, float32 dt) {
     }
 }
 
-vec2 ray_aabb_intersects(vec3 o,d,  l,h) {
-    vec3 t_low  = (l - o) / d;
-    vec3 t_high = (h - o) / d;
-    vec3 t_close = min(t_low, t_high);
-    vec3 t_far   = max(t_low, t_high);
-
-    return make_vec(max_axis(t_close), min_axis(t_far));
-}
-
 struct Entity_Raycast_Result {
     Entity* en;
     vec3 hit_point;

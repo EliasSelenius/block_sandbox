@@ -47,7 +47,7 @@ RenderLayer static_ui;
 RenderLayer static_ui_foreground;
 Camera world_cam = make_camera(90 * deg2rad, 0.01, 1000);
 
-Shader shader_voxel_chunk;
+Shader* shader_voxel_chunk = alloc_shader("shaders/voxels.glsl");
 Shader* shader_chunkgen = alloc_shader("shaders/chunkgen.glsl");
 
 Texture2D texture_spritesheet;
@@ -359,8 +359,6 @@ void main() {
 
     reload_sprites();
 
-    shader_voxel_chunk = load_shader("shaders/voxels.glsl");
-
     world_cam.transform.position = {-10, 32, -10};
 
 
@@ -372,7 +370,7 @@ void main() {
     init_hotbar(*player_hotbar);
 
     while grax_loop() {
-        ensure_chunks(player_en.tr.position);
+        // ensure_chunks(player_en.tr.position);
 
         if key_pressed(key_freecam_toggle) {
             player_en.tr.position = world_cam.transform.position;
@@ -383,7 +381,7 @@ void main() {
             shader_reload(Shaders.gpass);
             shader_reload(*default2d_shader);
             shader_reload(*ui_shader);
-            shader_reload(*shader_voxel_chunk);
+            shader_reload(shader_voxel_chunk);
             shader_reload(Shaders.dirlight);
             shader_reload(shader_chunkgen);
 
@@ -515,24 +513,6 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
 
     return {};
 }
-
-// void* map_buffer(uint32 id) {}
-// void unmap_buffer(uint32 id) {}
-
-// void* gpu_malloc(uint32 size) {
-//     uint32 id;
-//     glGenBuffers(1, *id);
-//     glBindBuffer(GL_ARRAY_BUFFER, id);
-//     glBufferData(GL_ARRAY_BUFFER, size, null, GL_STATIC_DRAW);
-//     void* ptr = glMapBuffer(GL_ARRAY_BUFFER, GL_READ_WRITE);
-//     glBindBuffer(GL_ARRAY_BUFFER, 0);
-
-//     return ptr;
-// }
-
-// void* gpu_realloc(void* ptr, uint32 size) {
-    
-// }
 
 
 void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
@@ -701,7 +681,7 @@ void item_action(Item* item, float32 dt) {
     let d = camera_ray(world_cam, cursor_pos);
 
 
-    float32 reach = 3.5;
+    float reach = 4.5;
     let target_block = grid_raycast(o,d, reach);
     let target_entity = entity_raycast(*world, o,d, reach);
     player.target_block = target_block;
@@ -913,7 +893,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         }
     }
 
-    if true {
+    if false { // rasterized chunks
         Material_PBR pbr = {
             albedo = {1,1,1},
             metallic = 0.1,
@@ -945,43 +925,43 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
 
     begin_light_pass(R);
 
-    // {
-    //     use(*shader_voxel_chunk);
-    //     set_uniform("u_camera_world_pos", world_cam.transform.position);
-    //     set_uniform("u_center_chunk_coord", center_chunk_coord);
-    //     bind_texture2D(texture_spritesheet.gl_handle, 3);
+    {
+        use(shader_voxel_chunk);
+        set_uniform("u_camera_world_pos", world_cam.transform.position);
+        set_uniform("u_center_chunk_coord", center_chunk_coord);
+        bind_texture2D(texture_spritesheet.gl_handle, 3);
 
-    //     uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
-    //     uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
-    //     byte* buffer = malloc(buffer_bytes);
+        // uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
+        // uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
+        // byte* buffer = malloc(buffer_bytes);
 
-    //     int32 cpsh = Chunk_Pool_Size/2;
+        // int32 cpsh = Chunk_Pool_Size/2;
 
-    //     for 0 .. Pool_Size {
-    //         let chunk = *chunk_pool[it];
+        // for 0 .. Pool_Size {
+        //     let chunk = *chunk_pool[it];
 
-    //         ivec3 rel = abs(chunk.coord - center_chunk_coord);
-    //         if rel.x > Render_Radius
-    //         or rel.y > Render_Radius
-    //         or rel.z > Render_Radius
-    //             continue;
+        //     ivec3 rel = abs(chunk.coord - center_chunk_coord);
+        //     if rel.x > Render_Radius
+        //     or rel.y > Render_Radius
+        //     or rel.z > Render_Radius
+        //         continue;
 
 
-    //         ivec3 c = chunk.coord + {cpsh, 0, cpsh} - center_chunk_coord;
-    //         uint32 index = c.x + c.z * Chunk_Pool_Size;
+        //     ivec3 c = chunk.coord + {cpsh, 0, cpsh} - center_chunk_coord;
+        //     uint32 index = c.x + c.z * Chunk_Pool_Size;
 
-    //         byte* dst = buffer + index*chunk_bytes;
-    //         memcpy(dst, *chunk.blocks, chunk_bytes);
-    //     }
+        //     byte* dst = buffer + index*chunk_bytes;
+        //     memcpy(dst, *chunk.blocks, chunk_bytes);
+        // }
 
-    //     update_ssbo("VoxelData", buffer, buffer_bytes);
-    //     free(buffer);
+        // update_ssbo("VoxelData", buffer, buffer_bytes);
+        // free(buffer);
 
-    //     set_depth_mode(DepthTest.Less_Equal, true);
-    //     set_blend_mode(Blend.Overwrite);
-    //     set_face_render_mode(Poly.Fill, Poly.Cull);
-    //     draw_screen_quad();
-    // }
+        set_depth_mode(DepthTest.Less_Equal, true);
+        set_blend_mode(Blend.Overwrite);
+        set_face_render_mode(Poly.Fill, Poly.Cull);
+        draw_screen_quad();
+    }
 
 
     gizmo_dispatch();
