@@ -12,7 +12,6 @@
 
 // TODO: put into camera.glsl
 uniform vec3 u_camera_world_pos;
-uniform ivec3 u_center_chunk_coord;
 
 
 layout(binding = 0) uniform sampler2D g_buffer_pos;
@@ -30,9 +29,6 @@ layout (std430) readonly buffer Textures {
 // };
 
 
-
-int get_index(ivec3 v) { return v.z * Chunk_Size * Chunk_Size + v.y * Chunk_Size + v.x; }
-ivec3 chunk_coord(ivec3 block_coord) { return ivec3(floor(vec3(block_coord) / float(Chunk_Size))); }
 
 // int get_block(ivec3 block_coord) {
 //     int cpsh = Chunk_Pool_Size/2;
@@ -232,7 +228,7 @@ HitInfo raycast_plane(ivec3 coord, int block_id, vec2 dists, vec3 o, vec3 d, vec
 
 HitInfo raycast(vec3 o, vec3 d) {
     Voxel_Traversal_State state = start_traversal(o, d);
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 1024; i++) {
         ivec3 prev_coord = state.coord;
         state = traverse(state);
 
@@ -240,7 +236,9 @@ HitInfo raycast(vec3 o, vec3 d) {
         vec3 hit_pos = o + d * dists.x;
 
         // int block_id = get_block(state.coord);
-        int block_id = sample_block_at_coord(state.coord);
+        // int block_id = sample_block_at_coord(state.coord);
+        int block_id = read_block_at_coord(state.coord);
+
         if (block_id < 0) break;
         if (block_id == 0) continue;
 

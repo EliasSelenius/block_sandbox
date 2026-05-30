@@ -16,7 +16,49 @@ ivec3 center_chunk_coord;
 // bool sample_occupancy_mask(ivec3 local) {
 // }
 
-Chunk[Chunk_Pool_Count] chunk_pool;
+// Chunk[Chunk_Pool_Count] chunk_pool;
+World_Block_Data world_data;
+
+struct GPU_Chunk {
+    ivec3 coord;
+    int32 block_index;
+}
+
+struct World_Block_Data {
+    uint32 ogl_block_buffer;
+    uint16* blocks;
+
+    uint32 ogl_chunk_buffer;
+    int32* chunks;
+}
+
+World_Block_Data init_world() {
+    World_Block_Data world = {};
+
+    uint32 block_size = Chunk_Pool_Count * Chunk_Block_Count;
+    world.ogl_block_buffer = ogl_buffer_generate(block_size * sizeof uint16);
+    world.blocks = ogl_buffer_ptr(world.ogl_block_buffer);
+
+
+    world.ogl_chunk_buffer = ogl_buffer_generate(Chunk_Pool_Count * sizeof int32);
+    world.chunks = ogl_buffer_ptr(world.ogl_chunk_buffer);
+
+    bind_buffer(get_ssbo("Chunks"),    world.ogl_chunk_buffer);
+    bind_buffer(get_ssbo("WorldData"), world.ogl_block_buffer);
+
+    for 0 .. Chunk_Pool_Count {
+        int32 index = it * Chunk_Block_Count;
+        world.chunks[it] = index;
+    }
+
+    for 0 .. block_size {
+        if random() < 0 {
+            world.blocks[it] = 1;
+        }
+    }
+
+    return world;
+}
 
 struct Chunk {
     ivec3 coord;

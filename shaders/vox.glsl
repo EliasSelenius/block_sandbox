@@ -7,10 +7,12 @@
 
 #define Render_Radius 4
 #define Chunk_Pool_Size (Render_Radius*2 + 1)
-#define Pool_Size (Chunk_Pool_Size*Chunk_Pool_Size)
+#define Chunk_Pool_Count (Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size)
+
 #define Chunk_Size 32
 #define Chunk_Block_Count (Chunk_Size * Chunk_Size * Chunk_Size)
 
+#define World_Block_Count (Chunk_Pool_Count * Chunk_Block_Count)
 
 
 // enum BlockIds ....
@@ -25,6 +27,39 @@
 #define BlockIds_Stone_Brick   8
 #define BlockIds_Grass         9
 
+int get_index(ivec3 v, int size) {
+    return v.z*size*size  +  v.y*size  +  v.x;
+}
+
+ivec3 chunk_coord(ivec3 block_coord) {
+    return ivec3(floor(vec3(block_coord) / float(Chunk_Size)));
+}
+
+
+uniform ivec3 u_center_chunk_coord;
+
+
+layout (std430) readonly buffer Chunks {
+    int chunks[Chunk_Pool_Count];
+};
+
+layout (std430) readonly buffer WorldData {
+    uint16_t blocks[];
+} world;
+
+int read_block_at_coord(ivec3 coord) {
+    ivec3 start_chunk = u_center_chunk_coord - ivec3(Render_Radius);
+
+    ivec3 chunkcor = chunk_coord(coord) - start_chunk;
+    int chunk_index = get_index(chunkcor, Chunk_Pool_Size);
+    if (chunk_index >= Chunk_Pool_Count) return 0;
+
+    int block_index = chunks[chunk_index];
+
+    ivec3 local = coord - chunk_coord(coord)*Chunk_Size;
+    int block_id = int(world.blocks[block_index + get_index(local, Chunk_Size)]);
+    return block_id;
+}
 
 void sdnoise_layers(vec3 coord, out float value, out vec3 gradient) {
     float largest_f = 100.0;

@@ -314,6 +314,8 @@ void main() {
     gizmo_setup();
     init_draw2d();
 
+    world_data = init_world();
+
     let renderer = deferred_renderer_init();
     let R = *renderer;
     R.sun_dir = {1, 0, 0};
@@ -394,8 +396,7 @@ void main() {
         }
 
         if key_pressed(Key.escape) {
-            void DebugBreak();
-            DebugBreak();
+            debug_break();
         }
 
         float32 dt = 1.0/60.0; // deltatime();
@@ -515,7 +516,7 @@ Block_Raycast_Result grid_raycast(vec3 o,d, float32 max_dist) {
 }
 
 
-void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
+void player_move_input(Entity* en, Camera cam, vec2 input, float input_updown, dt) {
 
     float32 player_friction(vec3 normal) {
         static float32 player_default_friction = 0.8;
@@ -528,14 +529,13 @@ void player_move_input(Entity* en, Camera cam, vec2 input, float32 dt) {
 
     vec3 movement = noz(f*input.y - s*input.x);
 
-    float32 max_speed = player.stats.max_speed;
-    float32 acc_time  = player.stats.acc_time;
-    float32 acceleration = max_speed / acc_time;
-
+    float max_speed = player.stats.max_speed;
+    float acc_time  = player.stats.acc_time;
+    float acceleration = max_speed / acc_time;
 
     if player.flying {
         float fly_speed = max_speed * 2.0;
-        vec3 target_vel = (movement + {y=key_axis(Key.left_shift, key_jump)}) * fly_speed;
+        vec3 target_vel = (movement + {y=input_updown}) * fly_speed;
         en.vel = move(en.vel, target_vel, acceleration*dt);
 
     } else {
@@ -648,8 +648,14 @@ void player_control(float32 dt) {
         }
     }
 
-    vec2 input = player_backpack_open ? {0,0} : Input.wasd;
-    player_move_input(*player_en, world_cam, input, dt);
+    vec2  input        = {0};
+    float input_updown = {0};
+    if !player_backpack_open {
+        input        = Input.wasd;
+        input_updown = key_axis(Key.left_shift, key_jump);
+    }
+
+    player_move_input(*player_en, world_cam, input, input_updown, dt);
 
 
     if key_pressed('F') {
@@ -928,7 +934,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     {
         use(shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
-        set_uniform("u_center_chunk_coord", center_chunk_coord);
+        set_uniform("u_center_chunk_coord", chunk_coord(player_en.tr.position));
         bind_texture2D(texture_spritesheet.gl_handle, 3);
 
         // uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
