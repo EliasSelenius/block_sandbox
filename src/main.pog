@@ -413,26 +413,6 @@ void main() {
     }
 }
 
-void compute_chunk(Chunk* chunk) {
-    let ssbo = get_ssbo("Chunk");
-    uint32 size = Chunk_Block_Count*sizeof uint16;
-    update_buffer(ssbo.buffer_id, size, null);
-
-    use(shader_chunkgen);
-    set_uniform("u_chunk_coord", chunk.coord);
-    dispatch_compute(Chunk_Size, Chunk_Size, Chunk_Size);
-
-
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, ssbo.buffer_id);
-
-    int32 buffer_size = 0;
-    glGetBufferParameteriv(GL_SHADER_STORAGE_BUFFER, GL_BUFFER_SIZE, *buffer_size);
-
-    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, size, *chunk.blocks);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-    chunk.must_remesh = true;
-}
 
 struct Checkbox_State {
     char* label;
@@ -934,34 +914,8 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     {
         use(shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
-        set_uniform("u_center_chunk_coord", chunk_coord(player_en.tr.position));
+        set_uniform("u_center_chunk_coord", center_chunk_coord);
         bind_texture2D(texture_spritesheet.gl_handle, 3);
-
-        // uint32 chunk_bytes = Chunk_Block_Count * sizeof uint16;
-        // uint32 buffer_bytes = sq(Chunk_Pool_Size) * chunk_bytes;
-        // byte* buffer = malloc(buffer_bytes);
-
-        // int32 cpsh = Chunk_Pool_Size/2;
-
-        // for 0 .. Pool_Size {
-        //     let chunk = *chunk_pool[it];
-
-        //     ivec3 rel = abs(chunk.coord - center_chunk_coord);
-        //     if rel.x > Render_Radius
-        //     or rel.y > Render_Radius
-        //     or rel.z > Render_Radius
-        //         continue;
-
-
-        //     ivec3 c = chunk.coord + {cpsh, 0, cpsh} - center_chunk_coord;
-        //     uint32 index = c.x + c.z * Chunk_Pool_Size;
-
-        //     byte* dst = buffer + index*chunk_bytes;
-        //     memcpy(dst, *chunk.blocks, chunk_bytes);
-        // }
-
-        // update_ssbo("VoxelData", buffer, buffer_bytes);
-        // free(buffer);
 
         set_depth_mode(DepthTest.Less_Equal, true);
         set_blend_mode(Blend.Overwrite);

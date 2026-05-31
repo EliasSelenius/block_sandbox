@@ -11,6 +11,7 @@ layout (std430) buffer Chunk {
 
 uniform ivec3 u_chunk_coord;
 
+
 #ifdef Compute
 void main() {
     ivec3 inv_id = ivec3(gl_GlobalInvocationID.xyz);
@@ -18,5 +19,11 @@ void main() {
     vec3 pos = u_chunk_coord * Chunk_Size + inv_id;
     int block_id = sample_block_at_coord(pos);
     blocks[Chunk_Size*Chunk_Size*inv_id.z + Chunk_Size*inv_id.y + inv_id.x] = uint16_t(block_id);
+
+
+    ivec3 coord;
+    int block_id = sample_block_at_coord(coord);
+    write_block_at_coord(coord, block_id);
+
 }
 #endif

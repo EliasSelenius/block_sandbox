@@ -26,25 +26,24 @@ struct GPU_Chunk {
 
 struct World_Block_Data {
     uint32 ogl_block_buffer;
-    uint16* blocks;
-
     uint32 ogl_chunk_buffer;
+
+    uint16* blocks;
     int32* chunks;
 }
 
 World_Block_Data init_world() {
     World_Block_Data world = {};
 
+    world.ogl_block_buffer = ogl_buffer_generate();
+    world.ogl_chunk_buffer = ogl_buffer_generate();
+
     uint32 block_size = Chunk_Pool_Count * Chunk_Block_Count;
-    world.ogl_block_buffer = ogl_buffer_generate(block_size * sizeof uint16);
-    world.blocks = ogl_buffer_ptr(world.ogl_block_buffer);
+    world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, block_size       * sizeof uint16, null);
+    world.chunks = ogl_buffer_persistent_storage(world.ogl_chunk_buffer, Chunk_Pool_Count * sizeof int32,  null);
 
-
-    world.ogl_chunk_buffer = ogl_buffer_generate(Chunk_Pool_Count * sizeof int32);
-    world.chunks = ogl_buffer_ptr(world.ogl_chunk_buffer);
-
-    bind_buffer(get_ssbo("Chunks"),    world.ogl_chunk_buffer);
     bind_buffer(get_ssbo("WorldData"), world.ogl_block_buffer);
+    bind_buffer(get_ssbo("Chunks"),    world.ogl_chunk_buffer);
 
     for 0 .. Chunk_Pool_Count {
         int32 index = it * Chunk_Block_Count;
@@ -58,6 +57,12 @@ World_Block_Data init_world() {
     }
 
     return world;
+}
+
+void compute_chunk(Chunk* chunk) {
+    use(shader_chunkgen);
+    set_uniform("u_chunk_coord", chunk.coord);
+    dispatch_compute(Chunk_Size, Chunk_Size, Chunk_Size);
 }
 
 struct Chunk {
@@ -90,8 +95,8 @@ ivec3 block_coord(vec3 pos) return make_ivec(round(pos));
 ivec3 chunk_coord(ivec3 block_coord) return make_ivec(floor(make_vec(block_coord) / (Chunk_Size as float32)));
 ivec3 chunk_coord(vec3 pos) return chunk_coord(block_coord(pos));
 
-int32 get_index(int32 s, x, y, z) return z*s*s + y*s + x;
-int32 get_index(int32 s, ivec3 v) return get_index(s, v.x, v.y, v.z);
+int32 get_index(int32 x, y, z, size) return z*size*size + y*size + x;
+int32 get_index(ivec3 v, int32 size) return get_index(v.x, v.y, v.z, size);
 
 int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
 int32 get_index(ivec3 v) return get_index(v.x, v.y, v.z);
@@ -112,19 +117,40 @@ Chunk* get_chunk(ivec3 chunk_coord) {
     return *surf_chunk.sub_chunks[index];
 }
 
-uint16* block_ptr(Chunk* chunk, ivec3 world_coord) {
-    ivec3 chunk_coord = chunk_coord(world_coord);
-    ivec3 local = world_coord - chunk_coord * Chunk_Size;
-    if !chunk_bound(local) return null;
-    return *chunk.blocks[get_index(local)];
+// uint16* block_ptr(Chunk* chunk, ivec3 world_coord) {
+//     ivec3 chunk_coord = chunk_coord(world_coord);
+//     ivec3 local = world_coord - chunk_coord * Chunk_Size;
+//     if !chunk_bound(local) return null;
+//     return *chunk.blocks[get_index(local)];
+// }
+
+// uint16* block_ptr(ivec3 world_coord) {
+//     ivec3 chunk_coord = chunk_coord(world_coord);
+//     let chunk = get_chunk(chunk_coord);
+//     if chunk == null return null;
+//     return block_ptr(chunk, world_coord);
+// }
+
+
+int32 block_index(ivec3 coord) {
+    if (max_axis(abs(chunk_coord(coord) - center_chunk_coord)) >= Render_Radius) return -1;
+
+    ivec3 start_chunk = center_chunk_coord - make_ivec3(Render_Radius);
+
+    ivec3 chunkcor = chunk_coord(coord) - start_chunk;
+    int32 chunk_index = get_index(chunkcor, Chunk_Pool_Size);
+    int32 block_index = world_data.chunks[chunk_index];
+
+    ivec3 local = coord - chunk_coord(coord)*Chunk_Size;
+    return block_index + get_index(local, Chunk_Size);
 }
 
-uint16* block_ptr(ivec3 world_coord) {
-    ivec3 chunk_coord = chunk_coord(world_coord);
-    let chunk = get_chunk(chunk_coord);
-    if chunk == null return null;
-    return block_ptr(chunk, world_coord);
+uint16* block_ptr(ivec3 coord) {
+    int32 index = block_index(coord);
+    if index == -1 return null;
+    return world_data.blocks + index;
 }
+
 
 uint16 get_block(ivec3 world_coord) {
     uint16* ptr = block_ptr(world_coord);

@@ -43,22 +43,33 @@ layout (std430) readonly buffer Chunks {
     int chunks[Chunk_Pool_Count];
 };
 
-layout (std430) readonly buffer WorldData {
+layout (std430) buffer WorldData {
     uint16_t blocks[];
 } world;
 
-int read_block_at_coord(ivec3 coord) {
+int block_index(ivec3 coord) {
+    if (max_axis(abs(chunk_coord(coord) - u_center_chunk_coord)) >= Render_Radius) return -1;
+
     ivec3 start_chunk = u_center_chunk_coord - ivec3(Render_Radius);
 
     ivec3 chunkcor = chunk_coord(coord) - start_chunk;
     int chunk_index = get_index(chunkcor, Chunk_Pool_Size);
-    if (chunk_index >= Chunk_Pool_Count) return 0;
-
     int block_index = chunks[chunk_index];
 
     ivec3 local = coord - chunk_coord(coord)*Chunk_Size;
-    int block_id = int(world.blocks[block_index + get_index(local, Chunk_Size)]);
-    return block_id;
+    return block_index + get_index(local, Chunk_Size);
+}
+
+int read_block_at_coord(ivec3 coord) {
+    int index = block_index(coord);
+    if (index == -1) return 0;
+    return int(world.blocks[index]);
+}
+
+void write_block_at_coord(ivec3 coord, int block_id) {
+    int index = block_index(coord);
+    if (index == -1) return;
+    world.blocks[index] = uint16_t(block_id);
 }
 
 void sdnoise_layers(vec3 coord, out float value, out vec3 gradient) {
