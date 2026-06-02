@@ -399,7 +399,7 @@ void main() {
             debug_break();
         }
 
-        float32 dt = 1.0/60.0; // deltatime();
+        float dt = 1.0/60.0; // deltatime();
 
         if is_freecam {
             enable_cursor();
@@ -541,7 +541,7 @@ void player_move_input(Entity* en, Camera cam, vec2 input, float input_updown, d
     // draw_text(make_vec(0.1, 0), 0.05, to_string(length(en.vel)), White);
 }
 
-void player_control(float32 dt) {
+void player_control(float dt) {
 
     if key_pressed(key_thirdperson_toggle) {
         is_thirdperson = !is_thirdperson;
@@ -578,9 +578,9 @@ void player_control(float32 dt) {
 
 
     if player_backpack_open {
-        draw_inventory();
+        draw_inventory(dt);
     } else {
-        draw_hotbar();
+        draw_hotbar(dt);
         draw_text(vec2_zero, 0.05, "X", White);
 
         if is_thirdperson {

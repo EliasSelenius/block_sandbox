@@ -748,7 +748,12 @@ Item* get_first_empty_slot(Inventory* inv) {
 int32 get_slot_index_for(Inventory* inv, uint32 item_id) {
     for 0 .. inv.rows*inv.cols {
         Item item = inv.items[it];
-        if item.id == item_id and item.count != 0  return it;
+        let info = item_infos[item.id];
+
+        if item.id == item_id
+        if item.count != 0
+        if item.count != info.max_stack_count
+            return it;
     }
 
     for 0 .. inv.rows*inv.cols {
@@ -1000,8 +1005,7 @@ void swap(uint32 size, void* a, b) {
     memcpy(b, temp, size);
 }
 
-void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next) {
-    float32 dt = deltatime();
+void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next, float dt) {
     float32 px = 2.0 / app.window_height;
 
     for 0 .. slots.elements_count {
@@ -1044,7 +1048,7 @@ void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
     draw_border(rect, 2*px, color_border);
 }
 
-void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float32 dt) {
+void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float dt) {
     if hover(slot.rect, Input.mouse_pos) {
         state.hover_slot = slot;
         state.slots_to_swap_to = next;
@@ -1153,15 +1157,14 @@ void draw_item_tooltip(vec2 pos, Item item, float32 time) {
     draw_text(*static_ui_foreground, txt_pos, glyph_height, str, color_txt);
 }
 
-void draw_inventory() {
-    float32 dt = deltatime();
+void draw_inventory(float dt) {
     let state = *ui_inventory_state;
     float32 slot_size = 1.2 / 9;
 
     let prev_hover = state.hover_slot;
     state.hover_slot = null;
-    draw_slots(state, *state.slots_hotbar, *state.slots_backpack);
-    draw_slots(state, *state.slots_backpack, *state.slots_hotbar);
+    draw_slots(state, *state.slots_hotbar, *state.slots_backpack, dt);
+    draw_slots(state, *state.slots_backpack, *state.slots_hotbar, dt);
     UI_Slot* hover = state.hover_slot;
     UI_Slot* select = *state.select_slot;
 
@@ -1238,7 +1241,7 @@ void init_hotbar(Inventory* hotbar) {
     prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
 }
 
-void draw_hotbar() {
+void draw_hotbar(float dt) {
     let state = *ui_inventory_state;
 
     uint32 prev_index = hotbar_selected_slot;
@@ -1254,7 +1257,7 @@ void draw_hotbar() {
         slot.pos = slot.pos + random_unit_vec2() * slot.rect.size.y * rand_item_offset_scale;
     }
 
-    draw_slots(state, slots, null);
+    draw_slots(state, slots, null, dt);
 }
 
 bool draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
