@@ -8,9 +8,10 @@ const Chunk_Pool_Count = Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size;
 const Chunk_Size = 32;
 const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 
+const Block_Count = Chunk_Pool_Count * Chunk_Block_Count;
+
 SurfaceChunk[Pool_Size] surface_chunk_pool;
 
-ivec3 center_chunk_coord;
 
 // const Chunk_Occupancy_Mask_Size = Chunk_Block_Count / 8;
 // bool sample_occupancy_mask(ivec3 local) {
@@ -30,6 +31,8 @@ struct World_Block_Data {
 
     uint16* blocks;
     int32* chunks;
+
+    ivec3 center_chunk_coord;
 }
 
 World_Block_Data init_world() {
@@ -38,8 +41,7 @@ World_Block_Data init_world() {
     world.ogl_block_buffer = ogl_buffer_generate();
     world.ogl_chunk_buffer = ogl_buffer_generate();
 
-    uint32 block_size = Chunk_Pool_Count * Chunk_Block_Count;
-    world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, block_size       * sizeof uint16, null);
+    world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, Block_Count      * sizeof uint16, null);
     world.chunks = ogl_buffer_persistent_storage(world.ogl_chunk_buffer, Chunk_Pool_Count * sizeof int32,  null);
 
     bind_buffer(get_ssbo("WorldData"), world.ogl_block_buffer);
@@ -50,7 +52,7 @@ World_Block_Data init_world() {
         world.chunks[it] = index;
     }
 
-    for 0 .. block_size {
+    for 0 .. Block_Count {
         if random() < 0 {
             world.blocks[it] = 1;
         }
@@ -59,10 +61,29 @@ World_Block_Data init_world() {
     return world;
 }
 
-void compute_chunk(Chunk* chunk) {
+void dispatch_compute_worldgen(ivec3 start_coord, size) {
     use(shader_chunkgen);
-    set_uniform("u_chunk_coord", chunk.coord);
-    dispatch_compute(Chunk_Size, Chunk_Size, Chunk_Size);
+    set_uniform("u_center_chunk_coord", world_data.center_chunk_coord);
+    set_uniform("u_start_coord", start_coord);
+    dispatch_compute(size);
+}
+
+void ensure_chunks(vec3 pos) {
+    ivec3 old_center = world_data.center_chunk_coord;
+    ivec3 new_center = chunk_coord(pos);
+    if equals(new_center, old_center) {
+        return;
+    }
+
+    world_data.center_chunk_coord = new_center;
+
+    ivec3 diff = old_center - new_center;
+
+
+
+    ivec3 start_coord = (new_center - make_ivec3(Render_Radius))*Chunk_Size;
+    dispatch_compute_worldgen(start_coord, make_ivec3(Chunk_Pool_Size * Chunk_Size));
+
 }
 
 struct Chunk {
@@ -133,9 +154,9 @@ Chunk* get_chunk(ivec3 chunk_coord) {
 
 
 int32 block_index(ivec3 coord) {
-    if (max_axis(abs(chunk_coord(coord) - center_chunk_coord)) >= Render_Radius) return -1;
+    if (max_axis(abs(chunk_coord(coord) - world_data.center_chunk_coord)) >= Render_Radius) return -1;
 
-    ivec3 start_chunk = center_chunk_coord - make_ivec3(Render_Radius);
+    ivec3 start_chunk = world_data.center_chunk_coord - make_ivec3(Render_Radius);
 
     ivec3 chunkcor = chunk_coord(coord) - start_chunk;
     int32 chunk_index = get_index(chunkcor, Chunk_Pool_Size);
@@ -166,40 +187,40 @@ void set_block(ivec3 world_coord, uint16 id) {
     }
 }
 
-void ensure_chunks(vec3 position) {
-    ivec3 center = chunk_coord(position);
-    center.y = 0;
-    center_chunk_coord = center;
+// void ensure_chunks(vec3 position) {
+//     ivec3 center = chunk_coord(position);
+//     center.y = 0;
+//     center_chunk_coord = center;
 
-    ivec2 surface_coord = xz(center);
+//     ivec2 surface_coord = xz(center);
 
-    SurfaceChunk*[..] old_chunks = list_create(sizeof SurfaceChunk*);
+//     SurfaceChunk*[..] old_chunks = list_create(sizeof SurfaceChunk*);
 
-    for 0 .. Pool_Size {
-        let chunk = *surface_chunk_pool[it];
-        ivec2 rel = abs(chunk.xz_coord - surface_coord);
-        if rel.x > Render_Radius
-        or rel.y > Render_Radius
-        {
-            list_add(*old_chunks, *chunk);
-        }
-    }
+//     for 0 .. Pool_Size {
+//         let chunk = *surface_chunk_pool[it];
+//         ivec2 rel = abs(chunk.xz_coord - surface_coord);
+//         if rel.x > Render_Radius
+//         or rel.y > Render_Radius
+//         {
+//             list_add(*old_chunks, *chunk);
+//         }
+//     }
 
-    int32 s = Render_Radius;
-    for z: -s .. s+1 for x: -s .. s+1 {
-        ivec2 coord = surface_coord + {x, z};
+//     int32 s = Render_Radius;
+//     for z: -s .. s+1 for x: -s .. s+1 {
+//         ivec2 coord = surface_coord + {x, z};
 
-        SurfaceChunk* chunk = get_surface_chunk(coord);
-        if chunk == null {
-            chunk = @(list_pop(old_chunks) as SurfaceChunk**);
-            init_surface_chunk(chunk, coord);
-            goto done;
-        }
-    }
+//         SurfaceChunk* chunk = get_surface_chunk(coord);
+//         if chunk == null {
+//             chunk = @(list_pop(old_chunks) as SurfaceChunk**);
+//             init_surface_chunk(chunk, coord);
+//             goto done;
+//         }
+//     }
 
-    done:
-    list_delete(old_chunks);
-}
+//     done:
+//     list_delete(old_chunks);
+// }
 
 float32 sample_terrain_noise(vec2 p) {
     uint32 octaves = 8;
@@ -260,7 +281,7 @@ void init_surface_chunk(SurfaceChunk* surface_chunk, ivec2 coord) {
     for 0 .. Chunk_Pool_Size {
         let chunk = *surface_chunk.sub_chunks[it];
 
-        compute_chunk(chunk);
+        // compute_chunk(chunk);
 
         // for z: 0 .. s for y: 0 .. s for x: 0 .. s {
         //     ivec3 block_coord = chunk.coord*Chunk_Size + {x,y,z};

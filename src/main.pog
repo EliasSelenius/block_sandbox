@@ -372,7 +372,7 @@ void main() {
     init_hotbar(*player_hotbar);
 
     while grax_loop() {
-        // ensure_chunks(player_en.tr.position);
+        ensure_chunks(player_en.tr.position);
 
         if key_pressed(key_freecam_toggle) {
             player_en.tr.position = world_cam.transform.position;
@@ -914,7 +914,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     {
         use(shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
-        set_uniform("u_center_chunk_coord", center_chunk_coord);
+        set_uniform("u_center_chunk_coord", world_data.center_chunk_coord);
         bind_texture2D(texture_spritesheet.gl_handle, 3);
 
         set_depth_mode(DepthTest.Less_Equal, true);
