@@ -41,11 +41,11 @@ World_Block_Data init_world() {
     world.ogl_block_buffer = ogl_buffer_generate();
     world.ogl_chunk_buffer = ogl_buffer_generate();
 
-    world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, Block_Count      * sizeof uint16, null);
-    world.chunks = ogl_buffer_persistent_storage(world.ogl_chunk_buffer, Chunk_Pool_Count * sizeof int32,  null);
+    world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, Block_Count      * sizeof uint16, null, OGL_Access.readwrite);
+    world.chunks = ogl_buffer_persistent_storage(world.ogl_chunk_buffer, Chunk_Pool_Count * sizeof int32,  null, OGL_Access.readwrite);
 
-    bind_buffer(get_ssbo("WorldData"), world.ogl_block_buffer);
-    bind_buffer(get_ssbo("Chunks"),    world.ogl_chunk_buffer);
+    bind_ssbo_buffer(get_ssbo("WorldData"), world.ogl_block_buffer);
+    bind_ssbo_buffer(get_ssbo("Chunks"),    world.ogl_chunk_buffer);
 
     for 0 .. Chunk_Pool_Count {
         int32 index = it * Chunk_Block_Count;

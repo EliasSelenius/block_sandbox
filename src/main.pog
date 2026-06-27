@@ -381,8 +381,8 @@ void main() {
 
         if key_pressed('R') {
             shader_reload(Shaders.gpass);
-            shader_reload(*default2d_shader);
-            shader_reload(*ui_shader);
+            shader_reload(Shaders.default2d);
+            shader_reload(Shaders.ui);
             shader_reload(shader_voxel_chunk);
             shader_reload(Shaders.dirlight);
             shader_reload(shader_chunkgen);

@@ -1,0 +1,646 @@
+
+
+struct Inventory {
+    uint32 rows, cols;
+    Item* items;
+}
+
+Inventory make_inventory(uint32 rows, cols) {
+    Inventory inv = {};
+    inv.rows = rows;
+    inv.cols = cols;
+    inv.items = calloc(rows * cols, sizeof Item);
+    return inv;
+}
+
+uint32 stack_inc(Item* item, uint32 amount) {
+    ItemInfo info = item_infos[item.id];
+
+    uint32 old_count = item.count;
+    uint32 new_count = old_count + amount;
+    item.count = min(info.max_stack_count, new_count);
+
+    return new_count - item.count;
+}
+
+void item_count(Item* item, int32 change) {
+    ItemInfo info = item_infos[item.id];
+
+    item.count += change;
+    if item.count == 0   item.id = 0;
+}
+
+Item* inv_item(Inventory* inv, uint32 x, y) return *inv.items[y*inv.cols + x];
+
+bool is_item(Item item) return item.id != 0 and item.count != 0;
+
+Item* get_first_empty_slot(Inventory* inv) {
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if !is_item(@item) return item;
+    }
+
+    return null;
+}
+
+int32 get_slot_index_for(Inventory* inv, uint32 item_id) {
+    for 0 .. inv.rows*inv.cols {
+        Item item = inv.items[it];
+        let info = item_infos[item.id];
+
+        if item.id == item_id
+        if item.count != 0
+        if item.count != info.max_stack_count
+            return it;
+    }
+
+    for 0 .. inv.rows*inv.cols {
+        Item item = inv.items[it];
+        if !is_item(item) return it;
+    }
+
+    return -1;
+}
+
+bool can_add_item(Inventory* inv, Item item) {
+    ItemInfo info = item_infos[item.id];
+
+    for 0 .. inv.rows*inv.cols {
+        Item* slot = *inv.items[it];
+        uint32 space = 0;
+        if slot.id == 0 {
+            space = info.max_stack_count;
+        } else if slot.id == item.id {
+            space = info.max_stack_count - slot.count;
+        } else continue;
+
+        item.count -= min(item.count, space);
+        if item.count == 0 return true;
+    }
+
+    return false;
+}
+
+bool add_item(Inventory* inv, Item item) {
+    ItemInfo info = item_infos[item.id];
+
+    for 0 .. inv.rows*inv.cols {
+        Item* slot = *inv.items[it];
+        if slot.count != 0 and slot.id == item.id {
+            item.count = stack_inc(slot, item.count);
+            if item.count == 0 return true;
+        }
+    }
+
+
+    let slot = get_first_empty_slot(inv);
+    if slot {
+        @slot = item;
+        return true;
+    }
+
+    return false;
+}
+
+uint32 take_item(Inventory* inv, Item desc) {
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if item.id == desc.id {
+            uint32 amount = min(item.count, desc.count);
+            item_count(item, -amount);
+            desc.count -= amount;
+            if desc.count == 0 break;
+        }
+    }
+
+    return desc.count;
+}
+
+uint32 item_total(Inventory* inv, ItemIds id) {
+    uint32 total = 0;
+    for 0 .. inv.rows*inv.cols {
+        Item* item = *inv.items[it];
+        if item.id == id  total += item.count;
+    }
+    return total;
+}
+
+bool player_craft(Recipe rec) {
+    for 0 .. rec.input.length {
+        Item ing = rec.input[it];
+        uint32 total = item_total(*player_backpack, ing.id) + item_total(*player_hotbar, ing.id);
+
+        if total < ing.count return false;
+    }
+
+    for 0 .. rec.input.length {
+        Item ing = rec.input[it];
+        ing.count = take_item(*player_backpack, ing);
+        ing.count = take_item(*player_hotbar,   ing);
+    }
+
+    return true;
+}
+
+bool damage_item(Item* item, uint32 dmg) {
+    ItemInfo info = item_infos[item.id];
+    if item.meta.durability == 0 {
+        item.meta.durability = info.max_durability;
+    }
+
+    item.meta.durability -= min(dmg, item.meta.durability);
+    if item.meta.durability == 0 {
+        // break item
+        @item = {};
+        return true;
+    }
+
+    return false;
+}
+
+
+
+struct UI_Slot {
+    Item* item;
+    UI_Rect rect;
+    vec2 pos, vel;
+    uint32 last_item_count;
+    float32 item_count_t;
+    float32 hover_t;
+}
+
+struct UI_Slots {
+    Inventory* inv;
+    UI_Slot* elements;
+    uint32 elements_count;
+}
+
+struct UI_Inventory_State {
+    UI_Slots slots_hotbar;
+    UI_Slots slots_backpack;
+    UI_Slots slots_chest;
+
+    UI_Rect rect_hotbar;
+    UI_Rect rect_backpack;
+    UI_Rect rect_crafting;
+    UI_Rect rect_menu;
+
+    UI_Slots* slots_to_swap_to;
+    UI_Slot* hover_slot;
+    UI_Slot select_slot;
+    Item select_item;
+
+    float32 item_tooltip_time;
+    float32 recipe_tooltip_time;
+
+    float32 time_recipe;
+    int32 selected_recipe_index;
+}
+
+UI_Inventory_State ui_inventory_state;
+
+float32 ui_item_scale        = 0.7;
+float32 ui_item_scale_hover  = 0.8;
+float32 ui_item_scale_select = 1.1;
+
+Color ui_item_slot_color        = opacity(Black, 0.8);
+Color ui_item_slot_color_hover  = opacity(Gray,  0.9);
+Color ui_item_slot_color_border = opacity(Black, 0.9);
+
+
+
+void open_inventory(Inventory* hotbar, backpack, chest) {
+    let state = *ui_inventory_state;
+
+    state.select_slot.item = *state.select_item;
+
+    float32 slot_size = 1.2 / 9;
+
+    float32 px = 2.0 / app.window_height;
+    float32 bottom_padding = slot_size*4; // slot_size/6.0;
+
+    float32 padding = slot_size/4.0;
+
+    UI_Rect hotbar_rect = {};
+    hotbar_rect.size = { hotbar.cols, hotbar.rows } * slot_size;
+    hotbar_rect.center = {0, -1 + slot_size/2.0 + bottom_padding};
+
+    UI_Rect backpack_rect = {};
+    backpack_rect.size = { backpack.cols, backpack.rows } * slot_size;
+    backpack_rect.center = hotbar_rect.center + {0, (backpack_rect.size.y + hotbar_rect.size.y)/2.0 + padding};
+
+    UI_Rect crafting_rect = {};
+    crafting_rect.size = {1,1}*slot_size;
+    crafting_rect.center = backpack_rect.center + {(backpack_rect.size.x + crafting_rect.size.x)/2.0 + padding, 0};
+
+
+    UI_Rect stat_menu_rect = {};
+    stat_menu_rect.size = { backpack.cols, 4 } * slot_size;
+    stat_menu_rect.center = {0, backpack_rect.center.y + (backpack_rect.size.y + stat_menu_rect.size.y)/2.0 + padding};
+
+
+
+    prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
+    prepare_elements(backpack_rect, *state.slots_backpack, backpack);
+    // prepare_elements(*slots_chest, chest);
+
+    state.rect_hotbar = hotbar_rect;
+    state.rect_backpack = backpack_rect;
+    state.rect_crafting = crafting_rect;
+    state.rect_menu = stat_menu_rect;
+
+}
+
+void prepare_elements(UI_Rect rect, UI_Slots* slots, Inventory* inv) {
+    slots.inv = inv;
+
+    uint32 rows = slots.inv.rows;
+    uint32 cols = slots.inv.cols;
+
+    slots.elements_count = rows*cols;
+    slots.elements = realloc(slots.elements, slots.elements_count * sizeof UI_Slot);
+
+    uint32 index = 0;
+    for y: 0 .. rows  for x: 0 .. cols {
+        UI_Rect slot_rect = grid(rect, rows, cols, x, y);
+
+        UI_Slot slot = {};
+        slot.rect = slot_rect;
+        slot.item = *inv.items[index];
+        slot.last_item_count = slot.item.count;
+
+        slots.elements[index] = slot;
+        index++;
+    }
+}
+
+void stack_item(UI_Slot* dst, src) {
+    ItemInfo info = item_infos[dst.item.id];
+    if dst.item.id == src.item.id
+    if src.item.count != info.max_stack_count
+    if dst.item.count != info.max_stack_count
+    {
+        src.item.count = stack_inc(dst.item, src.item.count);
+        if src.item.count == 0  src.item.id = 0;
+        return;
+    }
+
+    swap(sizeof Item, dst.item, src.item);
+    swap(*dst.pos, *src.pos);
+    swap(sizeof uint32, *dst.last_item_count, *src.last_item_count);
+}
+
+void swap(vec2* a, b) {
+    vec2 t = @a;
+    @a = @b;
+    @b = t;
+}
+
+void swap(uint32 size, void* a, b) {
+    uint8[size] temp;
+    memcpy(temp, a, size);
+    memcpy(a, b, size);
+    memcpy(b, temp, size);
+}
+
+void draw_slots(UI_Inventory_State* state, UI_Slots* slots, next, float dt) {
+    float32 px = 2.0 / app.window_height;
+
+    for 0 .. slots.elements_count {
+        UI_Slot* slot = *slots.elements[it];
+        draw_slot(state, slot, true, next, dt);
+    }
+}
+
+UI_Rect slot_item_rect(UI_Slot* slot) {
+    float32 item_scale = lerp(slot.hover_t, ui_item_scale, ui_item_scale_hover);
+    return {slot.pos, slot.rect.size * item_scale};
+}
+
+UI_Rect slot_item_rect(UI_Rect slot_rect, float32 hover_t) {
+    float32 item_scale = lerp(hover_t, ui_item_scale, ui_item_scale_hover);
+    return scale(slot_rect, item_scale);
+}
+
+
+void draw_border(UI_Rect rect, float32 border_thickness, Color color) {
+    float32 t = border_thickness;
+    rect = pad(rect, -t*2);
+    draw_rect(child(rect, -1,  1, rect.size.x - t, t), color);
+    draw_rect(child(rect,  1, -1, rect.size.x - t, t), color);
+    draw_rect(child(rect, -1, -1, t, rect.size.y - t), color);
+    draw_rect(child(rect,  1,  1, t, rect.size.y - t), color);
+}
+
+void draw_slot_background(UI_Rect rect, float32 hover_t, opa) {
+    Color color = lerp(hover_t, ui_item_slot_color, ui_item_slot_color_hover);
+    Color color_border = ui_item_slot_color_border;
+
+    color.a *= opa;
+    color_border.a *= opa;
+
+    float32 px = 2.0 / app.window_height;
+
+    rect = pad(rect, 6*px);
+    draw_rect(rect, color);
+    draw_border(rect, 2*px, color_border);
+}
+
+void draw_slot(UI_Inventory_State* state, UI_Slot* slot, bool draw_bkg, UI_Slots* next, float dt) {
+    if hover(slot.rect, Input.mouse_pos) {
+        state.hover_slot = slot;
+        state.slots_to_swap_to = next;
+    }
+
+    if draw_bkg  draw_slot_background(slot.rect, slot.hover_t, 1.0);
+
+    if slot.item_count_t < 0.001 {
+        if slot.last_item_count != slot.item.count {
+            // slot.pos.y += slot.rect.size.y;
+            slot.item_count_t = 1.0;
+        }
+    }
+
+    UI_Rect item_rect = slot_item_rect(slot);
+    draw_item(item_rect, @slot.item, slot.last_item_count, slot.item_count_t, 1.0);
+
+    update_slot(slot, slot.rect.center, dt);
+
+    slot.hover_t = clamp01(exp_decay(slot.hover_t, 0, 5, dt));
+    // slot.item_count_t = clamp01(exp_decay(slot.item_count_t, 0, 5, dt));
+
+    slot.item_count_t = clamp01(slot.item_count_t - 10.0*dt);
+    if slot.item_count_t < 0.001 {
+        slot.last_item_count = slot.item.count;
+    }
+}
+
+void update_slot(UI_Slot* slot, vec2 target_pos, float32 dt) {
+    slot.pos = slot.pos + slot.vel * dt;
+
+    // These were made static so that I could access them in the debugger
+    static float32 P = 450;
+    static float32 Td = 0.04;
+
+    vec2 acc = P*(target_pos - slot.pos) - P*Td*slot.vel;
+    slot.vel = slot.vel + acc * dt;
+}
+
+void draw_item(UI_Rect rect, Item item) draw_item(rect, item, 0, 0.0, 1.0);
+void draw_item(UI_Rect rect, Item item, uint32 last_count, float32 count_t, transparency) {
+    if item.id == 0 return;
+
+    ItemInfo info = item_infos[item.id];
+    float32 scale = rect.size.x;
+
+    float32 sprite_pixel_size = get_sprite_pixel_size(info.sprite).x;
+    Transform2D tr = { pos = rect.center, scale = scale / sprite_pixel_size };
+    vec4 color_factor = {1,1,1,transparency};
+    vec4 color_additive = vec4_zero;
+    vec4 color_outline = vec4_zero;
+    draw_sprite(tr, 0, info.sprite, color_factor, color_additive, color_outline);
+
+    if item.count != 1 {
+
+        Color color_count = White;
+
+        string text = to_string(item.count);
+        string last = to_string(last_count);
+
+
+        float32 glyph_height = scale/2.0;
+        UI_Rect txt_rect = {};
+        txt_rect.size = {(glyph_height/2.0) * text.length, glyph_height};
+        txt_rect = bottom_right(txt_rect, rect);
+
+        UI_Rect rect_last = translate(txt_rect, 0, lerp(count_t, -glyph_height, 0));
+        UI_Rect rect_text = translate(txt_rect, 0, lerp(count_t, 0, glyph_height));
+
+        draw_text(*static_ui_foreground, center_text(rect_text, glyph_height, text), glyph_height, text, opacity(color_count, 1.0 - count_t));
+        draw_text(*static_ui_foreground, center_text(rect_last, glyph_height, last), glyph_height, last, opacity(color_count, count_t));
+    }
+
+    uint32 dura = item.meta.durability;
+    if dura and dura != info.max_durability {
+        float32 prct = dura as float32 / info.max_durability as float32;
+        float32 px = 2.0 / app.window_height;
+        UI_Rect dura_bar_max = child(rect, -1, -1, rect.size.x, 2*px);
+        UI_Rect dura_bar = child(rect, -1, -1, rect.size.x * prct, 2*px);
+        draw_rect(dura_bar_max, Black);
+        draw_rect(dura_bar, Green);
+    }
+}
+
+void draw_item_tooltip(vec2 pos, Item item, float32 time) {
+    float32 transition_time = 0.2;
+    float32 t = clamp01(time / transition_time);
+
+    float32 opa = lerp(t, 0.0, 1.0);
+    float32 y =  lerp(t, -2, -1);
+
+    Color color_bg = opacity(Black, opa*0.7);
+    Color color_txt = opacity(White, opa);
+
+    ItemInfo item_info = item_infos[item.id];
+    string str = make_string(item_info.name);
+    float32 glyph_height = 0.07;
+
+    UI_Rect rect = {};
+    rect.size = text_size(str, glyph_height);
+    rect = place(rect, -1, y, pos);
+
+    draw_rect(*static_ui_foreground, rect, color_bg);
+
+    vec2 txt_pos = center_text(rect, glyph_height, str);
+    draw_text(*static_ui_foreground, txt_pos, glyph_height, str, color_txt);
+}
+
+void draw_inventory(float dt) {
+    let state = *ui_inventory_state;
+    float32 slot_size = 1.2 / 9;
+
+    let prev_hover = state.hover_slot;
+    state.hover_slot = null;
+    draw_slots(state, *state.slots_hotbar, *state.slots_backpack, dt);
+    draw_slots(state, *state.slots_backpack, *state.slots_hotbar, dt);
+    UI_Slot* hover = state.hover_slot;
+    UI_Slot* select = *state.select_slot;
+
+    bool did_craft = draw_crafting_menu(state, slot_size, dt);
+
+    if hover {
+        UI_Slot* dest = null;
+        int32 dest_index = get_slot_index_for(state.slots_to_swap_to.inv, hover.item.id);
+        if dest_index != -1   dest = *state.slots_to_swap_to.elements[dest_index];
+
+        hover.hover_t = 1.0;
+
+        if key_down(Key.left_shift) {
+            if dest {
+                draw_rect(dest.rect, opacity(White, 0.2));
+                if mouse_down(MouseButton.Left) {
+                    if hover.item.id != 0  stack_item(dest, hover);
+                }
+            }
+        } else {
+            if mouse_pressed(MouseButton.Left) {
+                // pickup  placedown  swap
+                stack_item(hover, select);
+            } else if mouse_pressed(MouseButton.Right) {
+
+                // 
+            }
+        }
+
+
+        if !select.item.id {
+            if prev_hover != hover   state.item_tooltip_time = 0.0;
+            vec2 tooltip_pos = point(hover.rect, -1, 1);
+            draw_item_tooltip(tooltip_pos, @hover.item, state.item_tooltip_time);
+            state.item_tooltip_time += dt;
+        }
+
+        if hover != prev_hover {
+            hover.pos = hover.pos + random_unit_vec2() * hover.rect.size.y * 0.2;
+        }
+    }
+
+    if select.item.id {
+
+        if !hover and !did_craft and mouse_pressed(MouseButton.Left) {
+            update_matrices(*world_cam);
+            let o = world_cam.transform.position;
+            let d = camera_ray(world_cam, Input.mouse_pos);
+
+            spawn_item(o,d*4, @select.item, 3);
+            @select.item = {};
+        }
+
+        float32 item_scale = 1.5;
+        UI_Rect item_rect = {select.pos, vec2_one*slot_size*ui_item_scale_select};
+        draw_item(item_rect, state.select_item);
+        update_slot(select, Input.mouse_pos, dt);
+    }
+}
+
+void init_hotbar(Inventory* hotbar) {
+    const hotbar_width = 1.2;
+    float32 slot_size = hotbar_width / hotbar.cols;
+
+    float32 px = 2.0 / app.window_height;
+    float32 bottom_padding = slot_size/6.0;
+
+    // UI_Rect rect_window = rect_pp(app.bottom_left, app.top_right);
+    UI_Rect hotbar_rect = {};
+    hotbar_rect.size = {hotbar_width, slot_size};
+    hotbar_rect.center = {0, -1 + slot_size/2.0 + bottom_padding};
+
+    let state = *ui_inventory_state;
+    prepare_elements(hotbar_rect, *state.slots_hotbar, hotbar);
+}
+
+void draw_hotbar(float dt) {
+    let state = *ui_inventory_state;
+
+    uint32 prev_index = hotbar_selected_slot;
+    hotbar_selected_slot = (9 + prev_index as int32 - Input.mouse_scroll as int32) as uint32 % 9;
+
+    UI_Slots* slots = *state.slots_hotbar;
+    UI_Slot*  slot = *slots.elements[hotbar_selected_slot];
+
+    slot.hover_t = 1.0;
+
+    if prev_index != hotbar_selected_slot {
+        static float32 rand_item_offset_scale = 0.2;
+        slot.pos = slot.pos + random_unit_vec2() * slot.rect.size.y * rand_item_offset_scale;
+    }
+
+    draw_slots(state, slots, null, dt);
+}
+
+bool draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
+    float32 px = 2.0 / app.window_height;
+
+    draw_rect(state.rect_menu, opacity(Black, 0.6));
+
+
+    UI_Rect rect_recipe = state.rect_crafting;
+    UI_Rect rect_all = rect_recipe;
+    rect_all.size.y *= 5;
+
+    int32 recipes_count = recipes.length as int32;
+    int32 s = sign(Input.mouse_scroll) * hover(rect_all, Input.mouse_pos);
+
+    int32 prev = state.selected_recipe_index;
+    state.selected_recipe_index = (recipes_count + state.selected_recipe_index + s) % recipes_count;
+
+    if state.selected_recipe_index != prev {
+        state.time_recipe = 1.0*s;
+        state.recipe_tooltip_time = 0.0;
+    }
+
+
+    Recipe recipe_current = recipes[state.selected_recipe_index];
+
+    int32 a = 3;
+    for int32 it: -a .. a+1 {
+        float32 offset = lerp(state.time_recipe, 0, rect_recipe.size.y);
+        float32 y_trans = rect_recipe.size.y*it + offset;
+        UI_Rect rect = translate(rect_recipe, 0, y_trans);
+
+        float32 alpha = clamp01(1.0 - abs(y_trans) / (rect_recipe.size.y*a));
+        // float32 alpha = 1.0 - abs((it as float32) / a);
+
+        int32 recipe_index = (recipes_count + state.selected_recipe_index + it) % recipes_count;
+        Recipe recipe = recipes[recipe_index];
+
+        draw_slot_background(rect, 0.0, alpha);
+        UI_Rect rect_item = slot_item_rect(rect, 0.0);
+        draw_item(rect_item, recipe.output, 0, 0.0, alpha);
+    }
+
+    float32 stride = rect_recipe.size.x + rect_recipe.size.x/2.0;
+    for 0 .. recipe_current.input.length {
+        UI_Rect rect_glyph = translate(rect_recipe, stride*(it+1) - stride/2.0, 0);
+        UI_Rect rect_slot  = translate(rect_recipe, stride*(it+1), 0);
+
+        char c = it == 0 ? '=' : '+';
+        draw_glyph(immediate_layer, rect_glyph.center, rect_glyph.size.y, c, Gray);
+        draw_slot_background(rect_slot, 0.0, 1.0);
+
+        UI_Rect rect_item = slot_item_rect(rect_slot, 0.0);
+        Item item = recipe_current.input[it];
+        draw_item(rect_item, item);
+    }
+
+    draw_item_tooltip(point(rect_recipe, 1,1), recipe_current.output, state.recipe_tooltip_time);
+    state.recipe_tooltip_time += dt;
+
+
+    UI_Slot* select = *state.select_slot;
+    bool did_craft = false;
+
+    if hover(rect_recipe, Input.mouse_pos)
+    if mouse_pressed(MouseButton.Left)
+    {
+        Item out = recipe_current.output;
+        ItemInfo info = item_infos[out.id];
+
+        bool yields_correct_count = select.item.count + out.count <= info.max_stack_count;
+        bool holding_valid_item = select.item.id == 0 or select.item.id == out.id;
+
+        if yields_correct_count and holding_valid_item
+        if player_craft(recipe_current) {
+            select.item.id = out.id;
+            select.item.count += out.count;
+
+            select.pos = rect_recipe.center;
+            did_craft = true;
+        }
+    }
+
+    // state.time_recipe += 5*dt;
+    state.time_recipe = exp_decay(state.time_recipe, 0, 15, dt);
+    return did_craft;
+}
+
