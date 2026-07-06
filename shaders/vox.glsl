@@ -95,26 +95,43 @@ void sdnoise_layers(vec3 coord, out float value, out vec3 gradient) {
     }
 
     value = h / total;
-    gradient = grad;
+    gradient = grad / total;
 }
 
 int sample_block_at_coord(vec3 coord) {
     float min_height = -128;
     float max_height =  128;
 
-    float td = (coord.y - min_height) / (max_height - min_height);
+    float td = clamp((coord.y - min_height) / (max_height - min_height), 0, 1);
     float density = 1.0 - td;
 
     vec3 gradient;
-    float value;
-    sdnoise_layers(coord, value, gradient);
+    float noise_value;
+    sdnoise_layers(coord, noise_value, gradient);
 
-    float upness = dot(gradient, vec3(0,1,0));
+    float value = (noise_value+1.0)*0.5;
+
+
+    float horiz = max_axis(abs(gradient.xz));
+    float upness = gradient.y - horiz;
+
+    bool up = gradient.y > abs(gradient.x)
+           && gradient.y > abs(gradient.z);
+
+
+    float unit = length(gradient)*0.5*1.5;
+    // float unit = 0.025; // one block distance: experimentally determined.
+
 
     int block_id = BlockIds_Air;
-    if ((value+1.0)*0.5 < density) {
-        block_id = BlockIds_Soil;
-        if (upness > 0.5) block_id = BlockIds_Turf;
+    if (value < density) {
+        block_id = BlockIds_Stone;
+
+        float d = density - value;
+        if (upness > -0.05 && d < 4.0*unit) {
+            block_id = BlockIds_Soil;
+            if (upness > -0.025 && d < unit) block_id = BlockIds_Turf;
+        }
     }
 
     return block_id;
