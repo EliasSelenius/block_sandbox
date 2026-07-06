@@ -52,11 +52,11 @@ World_Block_Data init_world() {
         world.chunks[it] = index;
     }
 
-    for 0 .. Block_Count {
-        if random() < 0 {
-            world.blocks[it] = 1;
-        }
-    }
+    // for 0 .. Block_Count {
+    //     if random() < 0 {
+    //         world.blocks[it] = 1;
+    //     }
+    // }
 
     return world;
 }
@@ -66,6 +66,10 @@ void dispatch_compute_worldgen(ivec3 start_coord, size) {
     set_uniform("u_center_chunk_coord", world_data.center_chunk_coord);
     set_uniform("u_start_coord", start_coord);
     dispatch_compute(size);
+    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+
+    GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    ogl_sync_wait(*sync, 1);
 }
 
 void ensure_chunks(vec3 pos) {
@@ -121,6 +125,24 @@ int32 get_index(ivec3 v, int32 size) return get_index(v.x, v.y, v.z, size);
 
 int32 get_index(int32 x, y, z) return get_index(Chunk_Size, x, y, z);
 int32 get_index(ivec3 v) return get_index(v.x, v.y, v.z);
+
+
+uint32 z_order_index(ivec3 coord) {
+    return z_order_index(
+        coord.x as uint32,
+        coord.y as uint32,
+        coord.z as uint32);
+}
+
+uint32 z_order_index(uint32 x, y, z) {
+    uint32 morton = 0;
+    for 0 .. 32 {  // Enough for most practical sizes
+        morton |= ((x & (1 << it)) << (2 * it)) |
+                  ((y & (1 << it)) << (2 * it + 1)) |
+                  ((z & (1 << it)) << (2 * it + 2));
+    }
+    return morton;
+}
 
 SurfaceChunk* get_surface_chunk(ivec2 coord) {
     for 0 .. Pool_Size {

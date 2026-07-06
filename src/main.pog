@@ -4,7 +4,7 @@ include "../plang/common/builtin/types.pog";
 include "../grax/grax.pog";
 include "src/voxels.pog";
 include "src/entity.pog";
-
+include "src/inventory.pog";
 
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g -fsanitize=address -fno-omit-frame-pointer
 // ..\plang\bin\plang.exe src\main.pog cflags -lglfw3dll -O0 -g
@@ -866,7 +866,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     // }
 
 
-    if false { // debug draw
+    if true { // debug draw
         for 0 .. Pool_Size {
             let surf_chunk = *surface_chunk_pool[it];
             for 0 .. Chunk_Pool_Size {
