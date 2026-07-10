@@ -10,7 +10,7 @@
 #define Chunk_Pool_Size (Render_Radius*2 + 1)
 #define Chunk_Pool_Count (Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size)
 
-#define Chunk_Size 32
+#define Chunk_Size 64
 #define Chunk_Block_Count (Chunk_Size * Chunk_Size * Chunk_Size)
 
 #define World_Block_Count (Chunk_Pool_Count * Chunk_Block_Count)
@@ -44,7 +44,15 @@ layout (std430) readonly buffer Chunks {
     int chunks[Chunk_Pool_Count];
 };
 
-layout (std430) buffer WorldData {
+#ifdef WorldData_Read
+    #define WorldData_Access readonly
+#endif
+
+#ifdef WorldData_Write
+    #define WorldData_Access writeonly
+#endif
+
+layout (std430) WorldData_Access buffer WorldData {
     uint16_t blocks[];
 } world;
 
@@ -61,17 +69,21 @@ int block_index(ivec3 coord) {
     return block_index + get_index(local, Chunk_Size);
 }
 
+#ifdef WorldData_Read
 int read_block_at_coord(ivec3 coord) {
     int index = block_index(coord);
     if (index == -1) return 0;
     return int(world.blocks[index]);
 }
+#endif
 
+#ifdef WorldData_Write
 void write_block_at_coord(ivec3 coord, int block_id) {
     int index = block_index(coord);
     if (index == -1) return;
     world.blocks[index] = uint16_t(block_id);
 }
+#endif
 
 void sdnoise_layers(vec3 coord, out float value, out vec3 gradient) {
     float largest_f = 100.0;
@@ -128,7 +140,7 @@ int sample_block_at_coord(vec3 coord) {
         block_id = BlockIds_Stone;
 
         float d = density - value;
-        if (upness > -0.05 && d < 4.0*unit) {
+        if (upness > -0.05 && d < 8.0*unit) {
             block_id = BlockIds_Soil;
             if (upness > -0.025 && d < unit) block_id = BlockIds_Turf;
         }

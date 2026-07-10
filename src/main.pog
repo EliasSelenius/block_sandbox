@@ -866,7 +866,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     // }
 
 
-    if true { // debug draw
+    if false { // debug draw
         for 0 .. Pool_Size {
             let surf_chunk = *surface_chunk_pool[it];
             for 0 .. Chunk_Pool_Size {

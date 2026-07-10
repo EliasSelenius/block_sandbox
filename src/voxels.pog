@@ -5,7 +5,7 @@ const Chunk_Pool_Size = Render_Radius*2 + 1;
 const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
 const Chunk_Pool_Count = Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size;
 
-const Chunk_Size = 32;
+const Chunk_Size = 64;
 const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 
 const Block_Count = Chunk_Pool_Count * Chunk_Block_Count;
@@ -69,7 +69,8 @@ void dispatch_compute_worldgen(ivec3 start_coord, size) {
     glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
 
     GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    ogl_sync_wait(*sync, 1);
+    ogl_sync_wait(*sync, 100);
+    // glFlush();
 }
 
 void ensure_chunks(vec3 pos) {
@@ -83,6 +84,9 @@ void ensure_chunks(vec3 pos) {
 
     ivec3 diff = old_center - new_center;
 
+    bool in_bounds(ivec3 center, coord) {
+        return max_axis(abs(coord - center)) <= Render_Radius;
+    }
 
 
     ivec3 start_coord = (new_center - make_ivec3(Render_Radius))*Chunk_Size;
@@ -633,7 +637,6 @@ Octree_Node* draw_octree(uint32 level, vec3 pos, float32 size, Octree_Node* node
 
 struct Tree64_Node {
     uint64 mask;
-    uint16 block_id;
 }
 
 bool is_leaf(Tree64_Node node) return node.mask == 0;

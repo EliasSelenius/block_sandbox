@@ -1,5 +1,6 @@
 #extension GL_NV_gpu_shader5 : enable
 
+#define WorldData_Write
 #include "shaders/vox.glsl"
 
 

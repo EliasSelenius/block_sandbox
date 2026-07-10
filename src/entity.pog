@@ -495,10 +495,8 @@ void world_update(World* w, float32 dt) {
             or enj.kind == .Block;
             else continue;
 
-            let box = box_overlap(effective_aabb(eni), effective_aabb(enj));
-            if box.size.x > 0 and box.size.y > 0 and box.size.z > 0 {
-
-            }
+            let inter = box_inter(effective_aabb(eni), effective_aabb(enj));
+            // calc_new_vel()
         }
     }
 

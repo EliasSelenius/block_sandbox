@@ -4,6 +4,8 @@
 
 #include "../grax/shaders/camera.glsl"
 #include "../grax/shaders/lights.glsl"
+
+#define WorldData_Read
 #include "shaders/vox.glsl"
 
 #define IO_Data FragData {\
@@ -228,7 +230,7 @@ HitInfo raycast_plane(ivec3 coord, int block_id, vec2 dists, vec3 o, vec3 d, vec
 
 HitInfo raycast(vec3 o, vec3 d) {
     Voxel_Traversal_State state = start_traversal(o, d);
-    for (int i = 0; i < 1024; i++) {
+    for (int i = 0; i < 512; i++) {
         ivec3 prev_coord = state.coord;
         state = traverse(state);
 
@@ -344,6 +346,7 @@ vec3 brdf(HitInfo hit, vec3 R) {
 
     vec3 I = g_sun_world_dir;
     vec3 N = normal_from_sampler(u_spritesheet, hit.uv, calc_uv_offset(hit.block_id), uv_scale, hit.normal);
+    // vec3 N = hit.normal;
 
     return cook_torrance_BRDF(I, N, R, g_sun_light.radiance, mat);
 }
