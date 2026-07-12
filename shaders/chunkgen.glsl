@@ -4,7 +4,7 @@
 #include "shaders/vox.glsl"
 
 
-layout (local_size_x = 1, local_size_y = 1) in;
+layout (local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 
 // layout (std430) buffer Chunk {
 //     uint16_t blocks[Chunk_Size*Chunk_Size*Chunk_Size];

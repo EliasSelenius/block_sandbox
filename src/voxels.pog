@@ -2,7 +2,7 @@
 const Render_Radius = 4;
 
 const Chunk_Pool_Size = Render_Radius*2 + 1;
-const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
+// const Pool_Size = Chunk_Pool_Size*Chunk_Pool_Size;
 const Chunk_Pool_Count = Chunk_Pool_Size * Chunk_Pool_Size * Chunk_Pool_Size;
 
 const Chunk_Size = 64;
@@ -10,12 +10,19 @@ const Chunk_Block_Count = Chunk_Size * Chunk_Size * Chunk_Size;
 
 const Block_Count = Chunk_Pool_Count * Chunk_Block_Count;
 
-SurfaceChunk[Pool_Size] surface_chunk_pool;
+// SurfaceChunk[Pool_Size] surface_chunk_pool;
 
 
 // const Chunk_Occupancy_Mask_Size = Chunk_Block_Count / 8;
 // bool sample_occupancy_mask(ivec3 local) {
 // }
+
+/* ocupancy mask:
+
+    64cc    16cc       4cc
+    [uint64][64*uint64][64*64*uint64]
+
+*/
 
 // Chunk[Chunk_Pool_Count] chunk_pool;
 World_Block_Data world_data;
@@ -31,6 +38,9 @@ struct World_Block_Data {
 
     uint16* blocks;
     int32* chunks;
+
+    GLsync sync_blocks_write;
+    GLsync sync_blocks_read;
 
     ivec3 center_chunk_coord;
 }
@@ -62,15 +72,21 @@ World_Block_Data init_world() {
 }
 
 void dispatch_compute_worldgen(ivec3 start_coord, size) {
+    // ogl_sync_wait(*world_data.sync_blocks_read, 100);
+    // glFinish();
+
     use(shader_chunkgen);
     set_uniform("u_center_chunk_coord", world_data.center_chunk_coord);
     set_uniform("u_start_coord", start_coord);
-    dispatch_compute(size);
-    glMemoryBarrier(GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+    dispatch_compute(size / 4);
 
-    GLsync sync = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    ogl_sync_wait(*sync, 100);
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+
+    // world_data.sync_blocks_write = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // ogl_sync_wait(*world_data.sync_blocks_write, 100);
+
     // glFlush();
+    // glFinish();
 }
 
 void ensure_chunks(vec3 pos) {
@@ -87,6 +103,19 @@ void ensure_chunks(vec3 pos) {
     bool in_bounds(ivec3 center, coord) {
         return max_axis(abs(coord - center)) <= Render_Radius;
     }
+
+    ivec3 old_start = old_center - make_ivec3(Render_Radius);
+    ivec3 new_start = new_center - make_ivec3(Render_Radius);
+
+    // [..] old_chunks = list
+    int32 s = Chunk_Pool_Size;
+    for z: 0 .. s  for y: 0 .. s  for x: 0 .. s  {
+        ivec3 chunkcor = make_ivec(x, y, z);
+        ivec3 old_coord = old_start + chunkcor;
+        ivec3 new_coord = new_start + chunkcor;
+
+    }
+
 
 
     ivec3 start_coord = (new_center - make_ivec3(Render_Radius))*Chunk_Size;
@@ -148,21 +177,21 @@ uint32 z_order_index(uint32 x, y, z) {
     return morton;
 }
 
-SurfaceChunk* get_surface_chunk(ivec2 coord) {
-    for 0 .. Pool_Size {
-        let chunk = *surface_chunk_pool[it];
-        if equals(chunk.xz_coord, coord) return chunk;
-    }
-    return null;
-}
+// SurfaceChunk* get_surface_chunk(ivec2 coord) {
+//     for 0 .. Pool_Size {
+//         let chunk = *surface_chunk_pool[it];
+//         if equals(chunk.xz_coord, coord) return chunk;
+//     }
+//     return null;
+// }
 
-Chunk* get_chunk(ivec3 chunk_coord) {
-    let surf_chunk = get_surface_chunk(xz(chunk_coord));
-    if surf_chunk == null return null;
-    int32 index = chunk_coord.y + Render_Radius;
-    if index < 0 or index >= Chunk_Pool_Size return null;
-    return *surf_chunk.sub_chunks[index];
-}
+// Chunk* get_chunk(ivec3 chunk_coord) {
+//     let surf_chunk = get_surface_chunk(xz(chunk_coord));
+//     if surf_chunk == null return null;
+//     int32 index = chunk_coord.y + Render_Radius;
+//     if index < 0 or index >= Chunk_Pool_Size return null;
+//     return *surf_chunk.sub_chunks[index];
+// }
 
 // uint16* block_ptr(Chunk* chunk, ivec3 world_coord) {
 //     ivec3 chunk_coord = chunk_coord(world_coord);
@@ -180,7 +209,7 @@ Chunk* get_chunk(ivec3 chunk_coord) {
 
 
 int32 block_index(ivec3 coord) {
-    if (max_axis(abs(chunk_coord(coord) - world_data.center_chunk_coord)) >= Render_Radius) return -1;
+    if (max_axis(abs(chunk_coord(coord) - world_data.center_chunk_coord)) > Render_Radius) return -1;
 
     ivec3 start_chunk = world_data.center_chunk_coord - make_ivec3(Render_Radius);
 
@@ -189,7 +218,8 @@ int32 block_index(ivec3 coord) {
     int32 block_index = world_data.chunks[chunk_index];
 
     ivec3 local = coord - chunk_coord(coord)*Chunk_Size;
-    return block_index + get_index(local, Chunk_Size);
+    // return block_index + get_index(local, Chunk_Size);
+    return block_index + z_order_index(local);
 }
 
 uint16* block_ptr(ivec3 coord) {

@@ -57,7 +57,7 @@ layout (std430) WorldData_Access buffer WorldData {
 } world;
 
 int block_index(ivec3 coord) {
-    if (max_axis(abs(chunk_coord(coord) - u_center_chunk_coord)) >= Render_Radius) return -1;
+    if (max_axis(abs(chunk_coord(coord) - u_center_chunk_coord)) > Render_Radius) return -1;
 
     ivec3 start_chunk = u_center_chunk_coord - ivec3(Render_Radius);
 
@@ -66,7 +66,8 @@ int block_index(ivec3 coord) {
     int block_index = chunks[chunk_index];
 
     ivec3 local = coord - chunk_coord(coord)*Chunk_Size;
-    return block_index + get_index(local, Chunk_Size);
+    // return block_index + get_index(local, Chunk_Size);
+    return block_index + int(z_order_index(uvec3(local)));
 }
 
 #ifdef WorldData_Read
