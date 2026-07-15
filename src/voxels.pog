@@ -39,8 +39,7 @@ struct World_Block_Data {
     uint16* blocks;
     int32* chunks;
 
-    GLsync sync_blocks_write;
-    GLsync sync_blocks_read;
+    GLsync sync_chunkgen;
 
     ivec3 center_chunk_coord;
 }
@@ -72,21 +71,17 @@ World_Block_Data init_world() {
 }
 
 void dispatch_compute_worldgen(ivec3 start_coord, size) {
-    // ogl_sync_wait(*world_data.sync_blocks_read, 100);
-    // glFinish();
-
     use(shader_chunkgen);
     set_uniform("u_center_chunk_coord", world_data.center_chunk_coord);
     set_uniform("u_start_coord", start_coord);
     dispatch_compute(size / 4);
 
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_CLIENT_MAPPED_BUFFER_BARRIER_BIT);
+    ogl_sync_fence(*world_data.sync_chunkgen, "chunkgen");
+}
 
-    // world_data.sync_blocks_write = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-    // ogl_sync_wait(*world_data.sync_blocks_write, 100);
-
-    // glFlush();
-    // glFinish();
+void ensure_chunkgen_done() {
+    ogl_sync_wait(*world_data.sync_chunkgen, 100);
 }
 
 void ensure_chunks(vec3 pos) {
@@ -114,6 +109,11 @@ void ensure_chunks(vec3 pos) {
         ivec3 old_coord = old_start + chunkcor;
         ivec3 new_coord = new_start + chunkcor;
 
+        ivec3 diff = sign(make_vec(old_coord - new_coord));
+
+        // old_coord - old_center
+
+        // world_data.chunks[get_index(x, y, z, s)];
     }
 
 
@@ -223,6 +223,8 @@ int32 block_index(ivec3 coord) {
 }
 
 uint16* block_ptr(ivec3 coord) {
+    // ensure_chunkgen_done();
+
     int32 index = block_index(coord);
     if index == -1 return null;
     return world_data.blocks + index;
@@ -671,7 +673,74 @@ struct Tree64_Node {
 
 bool is_leaf(Tree64_Node node) return node.mask == 0;
 
+uint64 sub_chunk_mask(uint64[..]* masks, ivec3 coord, int32 size) {
+    if @masks == null  @masks = list_create(sizeof uint64);
 
+    if size == 4 {
+        uint64 mask = 0;
+        for z: 0 .. 4  for y: 0 .. 4  for x: 0 .. 4 {
+            ivec3 c = coord + {x, y, z};
+            if get_block(c) mask |= (1<<get_index(x, y, z, 4));
+        }
+        return mask;
+    }
+
+    int32 ss = size / 4;
+
+    // uint64* mask = list_append(masks, 64);
+    uint64 mask = 0;
+    for z: 0 .. 4  for y: 0 .. 4  for x: 0 .. 4 {
+        ivec3 c = coord + {x, y, z}*ss;
+        uint64 m = sub_chunk_mask(masks, c, ss);
+        uint32 i = get_index(x, y, z, 4);
+        if m  mask |= (1<<i);
+    }
+
+    return mask;
+}
+
+void draw_subchunk(ivec3 coord, uint32 size, Color color) {
+    vec3 pos = make_vec(coord) + vec3_one*(size/2.0 - 0.5);
+    float opa = 1.0 - clamp01(dist(pos, world_cam.transform.position) / (Render_Radius*Chunk_Size));
+    gizmo_box(pos, vec3_one*size, opacity(color, opa));
+}
+
+void draw_subchunks(ivec3 chunk_coord) {
+
+    ivec3 coord = chunk_coord*Chunk_Size;
+
+    static uint64[..] masks = null;
+    static ivec3 masks_chunk_coord = {9999,9999,9999};
+    if !equals(masks_chunk_coord, chunk_coord) {
+        masks_chunk_coord = chunk_coord;
+        list_clear(masks);
+        sub_chunk_mask(*masks, coord, Chunk_Size);
+    }
+
+
+    draw_subchunks(masks, 0, coord, Chunk_Size);
+
+    // uint32 l = list_length(masks);
+    // for 1 .. l {
+    //     uint64 mask = masks[it];
+    // }
+}
+
+void draw_subchunks(uint64[..] masks, uint32 mask_index, ivec3 coord, int32 size) {
+    if size == 1 return;
+
+    int32 ss = size / 4;
+    uint64 mask = masks[mask_index];
+    for z: 0 .. 4  for y: 0 .. 4  for x: 0 .. 4 {
+        uint32 i = get_index(x, y, z, 4);
+        if (mask & (1<<i)) != 0 {
+            ivec3 c = coord + {x, y, z}*ss;
+            draw_subchunk(c, ss, Purple);
+
+            draw_subchunks(masks, mask_index + i + 1, c, ss);
+        }
+    }
+}
 
 uint32 bit_count(uint8 num) {
     uint32[16] bit4_count_lookup = {

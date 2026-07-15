@@ -858,14 +858,16 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     if true { // debug draw
         ivec3 start_coord = world_data.center_chunk_coord - make_ivec3(Render_Radius);
         int32 s = Chunk_Pool_Size;
-        for z: 0 .. s  for y: 0 .. s  for x: 0 .. s  {
-            ivec3 chunkcor = make_ivec(x, y, z);
-            ivec3 coord = start_coord + chunkcor;
-            float size = Chunk_Size;
-            vec3 pos = make_vec(coord)*size + vec3_one*(size/2.0 - 0.5);
-            float opa = 1.0 - clamp01(dist(pos, cam.transform.position) / (Render_Radius*Chunk_Size));
-            gizmo_box(pos, vec3_one*size, opacity(Orange, opa));
-        }
+        // for z: 0 .. s  for y: 0 .. s  for x: 0 .. s  {
+        //     ivec3 chunkcor = make_ivec(x, y, z);
+        //     ivec3 coord = start_coord + chunkcor;
+        //     float size = Chunk_Size;
+        //     vec3 pos = make_vec(coord)*size + vec3_one*(size/2.0 - 0.5);
+        //     float opa = 1.0 - clamp01(dist(pos, cam.transform.position) / (Render_Radius*Chunk_Size));
+        //     gizmo_box(pos, vec3_one*size, opacity(Orange, opa));
+        // }
+
+        draw_subchunks(world_data.center_chunk_coord);
     }
 
     if false { // rasterized chunks
@@ -901,8 +903,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
     begin_light_pass(R);
 
     {
-        // ogl_sync_wait(*world_data.sync_blocks_read, 100);
-        // ogl_sync_wait(*world_data.sync_blocks_write, 1_000_000_000);
+        // ensure_chunkgen_done();
 
         use(shader_voxel_chunk);
         set_uniform("u_camera_world_pos", world_cam.transform.position);
@@ -913,9 +914,6 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         set_blend_mode(Blend.Overwrite);
         set_face_render_mode(Poly.Fill, Poly.Cull);
         draw_screen_quad();
-        // glFinish();
-
-        // world_data.sync_blocks_read = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     }
 
 
