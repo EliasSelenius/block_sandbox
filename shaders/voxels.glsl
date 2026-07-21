@@ -15,6 +15,8 @@
 // TODO: put into camera.glsl
 uniform vec3 u_camera_world_pos;
 
+uniform ivec3 u_chunk_coord;
+
 
 layout(binding = 0) uniform sampler2D g_buffer_pos;
 layout(binding = 1) uniform sampler2D g_buffer_normal;
@@ -227,15 +229,21 @@ HitInfo raycast_plane(ivec3 coord, int block_id, vec2 dists, vec3 o, vec3 d, vec
     return hit;
 }
 
-
-HitInfo raycast(vec3 o, vec3 d) {
+HitInfo raycast(vec3 o, vec3 d, float max_dist) {
     Voxel_Traversal_State state = start_traversal(o, d);
-    for (int i = 0; i < 512; i++) {
+    for (int i = 0; i < Chunk_Size*3; i++) {
         ivec3 prev_coord = state.coord;
         state = traverse(state);
 
+        // if (chunk_coord(prev_coord) != chunk_coord(state.coord)) break;
+        // if (i > 2 && chunk_coord(state.coord) != u_chunk_coord) break;
+
         vec2 dists = travel_distance(state);
         vec3 hit_pos = o + d * dists.x;
+
+        if (dists.x > max_dist) break;
+        // ivec3 local_coord = state.coord % Chunk_Size;
+        // if (min_axis(local_coord) < 0 || max_axis(local_coord) >= Chunk_Size) break;
 
         // int block_id = get_block(state.coord);
         // int block_id = sample_block_at_coord(state.coord);
@@ -305,9 +313,15 @@ HitInfo raycast(vec3 o, vec3 d) {
     return hit;
 }
 
+HitInfo raycast(vec3 o, vec3 d) {
+    return raycast(o, d, Infinity);
+}
+
 
 #ifdef VertexShader ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 out IO_Data vert_output;
+
+layout (location = 0) in vec3 a_Pos;
 
 vec4 screen_covering_quad(uint vert_id) {
     vec2 positions[] = vec2[](
@@ -320,7 +334,11 @@ vec4 screen_covering_quad(uint vert_id) {
 }
 
 void main() {
-    gl_Position = screen_covering_quad(gl_VertexID);
+    vec3 pos = vec3(u_chunk_coord) * Chunk_Size + vec3(Chunk_Size/2.0 - 0.5);
+
+    gl_Position = camera.projection * camera.view * vec4(pos + a_Pos*Chunk_Size/2.0, 1.0);
+
+    // gl_Position = screen_covering_quad(gl_VertexID);
     vert_output.ndc = gl_Position.xy;
 }
 #endif
@@ -407,6 +425,7 @@ vec3 raytrace(HitInfo hit_frag, vec3 o, vec3 d) {
 
 
 void main() {
+    gl_FragDepth = gl_FragCoord.z;
 
     spritesheet_dimensions = textureSize(u_spritesheet, 0) / Block_Pixel_Size;
     uv_scale = vec2(1.0) / spritesheet_dimensions;
@@ -415,29 +434,28 @@ void main() {
     g_sun_light.dir = mat3(camera.view) * g_sun_world_dir;
     g_sun_light.radiance = camera.sun_radiance.xyz;
 
+    // vec2 ndc = frag_input.ndc;
+    vec2 ndc = (gl_FragCoord.xy / ViewportSize)*2.0 - 1.0;
 
     vec3 ray_origin = u_camera_world_pos;
-    vec3 ray = camera_ray(frag_input.ndc);
+    vec3 ray = camera_ray(ndc);
 
-    if (false) { // clamping ray_origin to world bounding box
-        ivec3 chunk_pool_dim = ivec3(Chunk_Pool_Size, 1, Chunk_Pool_Size);
-        vec3 dim = vec3(chunk_pool_dim * Chunk_Size);
-        vec3 center = u_center_chunk_coord * Chunk_Size + vec3(float(Chunk_Size)/2.0 - 0.5);
-        vec3 l = center - dim*0.5;
-        vec3 h = center + dim*0.5;
+    vec3 center = u_chunk_coord * Chunk_Size + vec3(Chunk_Size/2.0 - 0.5);
+    vec3 l = center - vec3(Chunk_Size*0.5);
+    vec3 h = center + vec3(Chunk_Size*0.5);
+    vec3 o = ray_origin;
+    vec3 d = ray;
+    vec2 inter = ray_aabb_intersects(o, d, l, h);
 
-        vec3 o = ray_origin;
-        vec3 d = ray;
+    if (inter.x >= inter.y) discard;
 
-        vec2 inter = ray_aabb_intersects(o, d, l, h);
-        float close = inter.x;
-        float far = inter.y;
-        if ((close > 0.0) && (close < far)) {
-            ray_origin = o + close*d;
-        }
+    float max_dist = inter.y;
+    if (inter.x > 0) {
+        ray_origin = o + d*inter.x;
+        max_dist = inter.y - inter.x;
     }
 
-    HitInfo hit = raycast(ray_origin, ray);
+    HitInfo hit = raycast(ray_origin, ray, max_dist+0.1);
     if (hit.block_id == 0) discard;
 
     vec3 R = normalize(u_camera_world_pos - hit.hit_pos);

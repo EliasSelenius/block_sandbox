@@ -47,8 +47,8 @@ struct World_Block_Data {
 World_Block_Data init_world() {
     World_Block_Data world = {};
 
-    world.ogl_block_buffer = ogl_buffer_generate();
-    world.ogl_chunk_buffer = ogl_buffer_generate();
+    world.ogl_block_buffer = ogl_buffer_generate("blocks");
+    world.ogl_chunk_buffer = ogl_buffer_generate("chunks");
 
     world.blocks = ogl_buffer_persistent_storage(world.ogl_block_buffer, Block_Count      * sizeof uint16, null, OGL_Access.readwrite);
     world.chunks = ogl_buffer_persistent_storage(world.ogl_chunk_buffer, Chunk_Pool_Count * sizeof int32,  null, OGL_Access.readwrite);
@@ -223,7 +223,7 @@ int32 block_index(ivec3 coord) {
 }
 
 uint16* block_ptr(ivec3 coord) {
-    // ensure_chunkgen_done();
+    ensure_chunkgen_done();
 
     int32 index = block_index(coord);
     if index == -1 return null;
@@ -321,7 +321,7 @@ void init_surface_chunk(SurfaceChunk* surface_chunk, ivec2 coord) {
 
         if chunk.db.vao == 0 {
             chunk.mesh = mesh_create();
-            chunk.db = create_draw_buffers(sizeof vertex3D, vertex3D_attribs);
+            chunk.db = create_draw_buffers(vertex3D_attribs);
         }
 
         // memset(chunk.blocks, 0, Chunk_Block_Count * sizeof uint16);

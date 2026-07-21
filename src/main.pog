@@ -39,6 +39,8 @@ include "src/inventory.pog";
     - day/night cycle
 
     TODAY:
+        F1 screen improvements
+        ogl queries timestamps
 
 */
 
@@ -867,7 +869,7 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         //     gizmo_box(pos, vec3_one*size, opacity(Orange, opa));
         // }
 
-        draw_subchunks(world_data.center_chunk_coord);
+        // draw_subchunks(world_data.center_chunk_coord);
     }
 
     if false { // rasterized chunks
@@ -913,7 +915,20 @@ void draw_frame(DeferredRenderer* R, Camera cam) {
         set_depth_mode(DepthTest.Less_Equal, true);
         set_blend_mode(Blend.Overwrite);
         set_face_render_mode(Poly.Fill, Poly.Cull);
-        draw_screen_quad();
+
+        int32 s = Render_Radius;
+        for r: 0 .. Render_Radius {
+
+        }
+
+        for z: -s .. s+1  for y: -s .. s+1  for x: -s .. s+1 {
+            ivec3 coord = world_data.center_chunk_coord + {x, y, z};
+            set_uniform("u_chunk_coord", coord);
+            draw_elements(R.db_inverted_box);
+        }
+
+
+        // draw_screen_quad();
     }
 
 

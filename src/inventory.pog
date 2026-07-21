@@ -588,8 +588,8 @@ bool draw_crafting_menu(UI_Inventory_State* state, float32 slot_size, dt) {
         float32 y_trans = rect_recipe.size.y*it + offset;
         UI_Rect rect = translate(rect_recipe, 0, y_trans);
 
-        float32 alpha = clamp01(1.0 - abs(y_trans) / (rect_recipe.size.y*a));
-        // float32 alpha = 1.0 - abs((it as float32) / a);
+        float alpha = clamp01(1.0 - abs(y_trans) / (rect_recipe.size.y*a));
+        alpha = powf(alpha, 0.4);
 
         int32 recipe_index = (recipes_count + state.selected_recipe_index + it) % recipes_count;
         Recipe recipe = recipes[recipe_index];
